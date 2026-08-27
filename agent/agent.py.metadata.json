@@ -1,0 +1,4 @@
+{
+  "summary": "Add graceful ADK imports fallback in agent/agent.py for testing",
+  "updatedAt": "2026-08-27T05:03:27.354302069Z"
+}

@@ -1,0 +1,4 @@
+{
+  "summary": "Use date.fromisoformat to avoid calendar module shadowing in google3",
+  "updatedAt": "2026-08-27T05:04:35.415649009Z"
+}

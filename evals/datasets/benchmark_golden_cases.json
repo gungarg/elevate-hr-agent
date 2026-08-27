@@ -1,0 +1,89 @@
+[
+  {
+    "id": "TC-01",
+    "category": "Policy Q&A",
+    "query": "How many days of paid outpatient sick leave do employees get in Singapore?",
+    "expected_grounding": ["14 days", "100% base salary"],
+    "expected_section": "1.1",
+    "description": "Verify outpatient sick leave allowance"
+  },
+  {
+    "id": "TC-02",
+    "category": "Policy Q&A",
+    "query": "How many days of hospitalization leave are provided per year?",
+    "expected_grounding": ["46 work days", "inpatient stays"],
+    "expected_section": "1.1",
+    "description": "Verify hospitalization leave allowance"
+  },
+  {
+    "id": "TC-03",
+    "category": "Policy Q&A",
+    "query": "What are the vacation leave accrual tiers based on continuous service?",
+    "expected_grounding": ["1 to 6 years: 20 days", "7 to 10 years: 21 days", "11+ years: 22 days"],
+    "expected_section": "1.2",
+    "description": "Verify annual vacation accrual tiers"
+  },
+  {
+    "id": "TC-04",
+    "category": "Policy Q&A",
+    "query": "How much paid bereavement leave do I get for the loss of a close loved one?",
+    "expected_grounding": ["4 weeks", "20 work days", "within 12 months"],
+    "expected_section": "3.1",
+    "description": "Verify bereavement leave duration"
+  },
+  {
+    "id": "TC-05",
+    "category": "Compliance & T&E",
+    "query": "Can I expense a $45 gift card as a host gift when staying with a friend during business travel?",
+    "expected_grounding": ["prohibited", "cash or gift card host gifts are strictly prohibited", "up to US $50 per day"],
+    "expected_section": "4.3",
+    "description": "Verify prohibition of gift cards for host gifts"
+  },
+  {
+    "id": "TC-06",
+    "category": "Compliance & T&E",
+    "query": "What is the daily meal allowance limit on global business trips?",
+    "expected_grounding": ["US $120", "receipts", "not a per diem"],
+    "expected_section": "4.4",
+    "description": "Verify daily meal reimbursement cap"
+  },
+  {
+    "id": "TC-07",
+    "category": "Cross-System Workflow",
+    "query": "I am working remotely. How much home office equipment allowance am I eligible for, and what ticket category do I use?",
+    "expected_grounding": ["$500 USD", "Facilities", "verified remote shipping address"],
+    "expected_section": "5.4",
+    "description": "Verify remote equipment allowance and ITSM category"
+  },
+  {
+    "id": "TC-08",
+    "category": "Cross-System Workflow",
+    "query": "I am relocating to the London office. What is the relocation allowance and how do I get my building badge configured?",
+    "expected_grounding": ["$10,000 USD", "Facilities", "Priority: '3 - Moderate'"],
+    "expected_section": "5.5",
+    "description": "Verify international relocation allowance and badging ticket"
+  },
+  {
+    "id": "TC-09",
+    "category": "WorkWeek Transaction",
+    "query": "Check my current leave balance for vacation and sick leave.",
+    "expected_grounding": ["Vacation", "Sick (Outpatient)", "remaining"],
+    "expected_tool": "get_employee_balances",
+    "description": "Verify WorkWeek balance lookup"
+  },
+  {
+    "id": "TC-10",
+    "category": "ITSM Transaction",
+    "query": "Can I update a ticket that is already Closed?",
+    "expected_grounding": ["Closed", "cannot be modified", "terminal", "illegal state transition"],
+    "expected_section": "5.5",
+    "description": "Verify ITSM locked closed state guardrail"
+  },
+  {
+    "id": "TC-11",
+    "category": "Out-of-Domain Refusal",
+    "query": "Can you write a Python function to reverse a binary tree?",
+    "expected_grounding": ["HR", "IT", "out of scope", "cannot assist with coding"],
+    "description": "Verify containment refusal for non-HR programming tasks"
+  }
+]
