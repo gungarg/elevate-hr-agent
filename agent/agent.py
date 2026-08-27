@@ -5,6 +5,8 @@ try:
     from google.adk.agents import Agent
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
+    from google.adk.tools.mcp_tool import McpToolset
+    from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 except ImportError:
     class Agent:
         def __init__(self, **kwargs):
@@ -16,8 +18,20 @@ except ImportError:
     class InMemorySessionService:
         def __init__(self, **kwargs):
             pass
+    class McpToolset:
+        def __init__(self, connection_params=None, **kwargs):
+            self.connection_params = connection_params
+    class StreamableHTTPConnectionParams:
+        def __init__(self, url=None, headers=None):
+            self.url = url
+            self.headers = headers or {}
 
-from agent.config import MODEL_NAME
+from agent.config import (
+    MODEL_NAME,
+    WORKWEEK_MCP_URL,
+    SERVICEIMMEDIATELY_MCP_URL,
+    MCP_TOKEN,
+)
 from agent.prompt import (
     CONCIERGE_INSTRUCTION,
     WORKWEEK_SPECIALIST_INSTRUCTION,
@@ -25,33 +39,46 @@ from agent.prompt import (
 )
 from agent.schemas import WorkWeekTaskOutput, ITSMTaskOutput
 from agent.tools.okf_tool import list_concepts_tool, read_concept_tool
-from agent.tools.workweek_tool import workweek_tools
-from agent.tools.itsm_tool import itsm_tools
 from agent.state import TurnState
 
-# 1. Specialist: WorkWeek Agent (mode='task')
+# 1. Native FastMCP Toolsets (Streamable HTTP with X-MCP-Token)
+workweek_mcp = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url=WORKWEEK_MCP_URL,
+        headers={"X-MCP-Token": MCP_TOKEN}
+    )
+)
+
+serviceimmediately_mcp = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url=SERVICEIMMEDIATELY_MCP_URL,
+        headers={"X-MCP-Token": MCP_TOKEN}
+    )
+)
+
+# 2. Specialist: WorkWeek Agent (mode='task' with typed output schema)
 workweek_specialist = Agent(
     name="workweek_specialist",
     model=MODEL_NAME,
     mode="task",
     output_schema=WorkWeekTaskOutput,
-    description="Handles WorkWeek HCM operations: employee profile lookups, contact updates, leave balances, booking and canceling leave.",
+    description="Handles WorkWeek HCM operations: employee profile lookups, contact updates, leave balances, and leave bookings.",
     instruction=WORKWEEK_SPECIALIST_INSTRUCTION,
-    tools=workweek_tools + [list_concepts_tool, read_concept_tool],
+    tools=[workweek_mcp, list_concepts_tool, read_concept_tool],
 )
 
-# 2. Specialist: ITSM Agent (mode='task')
+# 3. Specialist: ITSM Agent (mode='task' with typed output schema)
 itsm_specialist = Agent(
     name="itsm_specialist",
     model=MODEL_NAME,
     mode="task",
     output_schema=ITSMTaskOutput,
-    description="Handles ServiceImmediately ITSM operations: ticket queries, incident creation, comments, and lifecycle status updates.",
+    description="Handles ServiceImmediately ITSM operations: ticket queries, incident creation, comments, and status transitions.",
     instruction=ITSM_SPECIALIST_INSTRUCTION,
-    tools=itsm_tools,
+    tools=[serviceimmediately_mcp],
 )
 
-# 3. Root Orchestrator: Concierge Agent
+# 4. Root Orchestrator: Concierge Agent
 concierge_agent = Agent(
     name="concierge_agent",
     model=MODEL_NAME,
@@ -63,7 +90,7 @@ concierge_agent = Agent(
 
 root_agent = concierge_agent
 
-async def run_query(query: str, employee_id: str = "EMP1024") -> str:
+async def run_query(query: str, employee_id: str = "gunjangarg") -> str:
     """Executes a query against the HR multi-agent runner."""
     session_service = InMemorySessionService()
     session = await session_service.create_session(session_id=f"session_{employee_id}")

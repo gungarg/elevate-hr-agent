@@ -17,8 +17,20 @@ MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 POLICY_GCS_BUCKET = os.getenv("POLICY_GCS_BUCKET", "elevate-hr-policies-prod")
 KNOWLEDGE_LOCAL_FALLBACK = os.getenv("KNOWLEDGE_LOCAL_FALLBACK", "true").lower() == "true"
 
-WORKWEEK_MCP_URL = os.getenv("WORKWEEK_MCP_URL", "https://mock-saas.aishprabhat.demo.altostrat.com/work-week/mcp/")
-SERVICEIMMEDIATELY_MCP_URL = os.getenv("SERVICEIMMEDIATELY_MCP_URL", "https://mock-saas.aishprabhat.demo.altostrat.com/service-immediately/mcp/")
-MCP_TOKEN = os.getenv("MCP_TOKEN", "mcp_your_token_here")
+# FastMCP Remote Endpoints
+WORKWEEK_MCP_URL = os.getenv(
+    "WORKWEEK_MCP_URL",
+    "https://mock-saas.aishprabhat.demo.altostrat.com/work-week/mcp/"
+)
+SERVICEIMMEDIATELY_MCP_URL = os.getenv(
+    "SERVICEIMMEDIATELY_MCP_URL",
+    "https://mock-saas.aishprabhat.demo.altostrat.com/service-immediately/mcp/"
+)
+
+# Active FastMCP Authentication Token
+MCP_TOKEN = os.getenv("MCP_TOKEN", "mcp_zYnFTkwwEfKkx6qaHgW2XTiTRzREoiHjwDZR3I64XdA")
+
+# Optional Google Cloud IAP Identity Token
+IAP_TOKEN = os.getenv("IAP_TOKEN", "")
 
 ENABLE_MODEL_ARMOR = os.getenv("ENABLE_MODEL_ARMOR", "false").lower() == "true"

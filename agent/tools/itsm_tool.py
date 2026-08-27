@@ -8,7 +8,7 @@ except ImportError:
         def __init__(self, func):
             self.func = func
 
-from agent.config import SERVICEIMMEDIATELY_MCP_URL, MCP_TOKEN
+from agent.config import SERVICEIMMEDIATELY_MCP_URL, MCP_TOKEN, IAP_TOKEN
 
 class ITSMClient:
     """Client for ServiceImmediately FastMCP server and Incident Management."""
@@ -17,19 +17,18 @@ class ITSMClient:
         "New": ["In Progress", "Closed"],
         "In Progress": ["Resolved", "Closed"],
         "Resolved": ["In Progress", "Closed"],
-        "Closed": [] # Terminal lock
+        "Closed": []
     }
     
-    def __init__(self, base_url: str = SERVICEIMMEDIATELY_MCP_URL, token: str = MCP_TOKEN):
+    def __init__(self, base_url: str = SERVICEIMMEDIATELY_MCP_URL, token: str = MCP_TOKEN, iap_token: str = IAP_TOKEN):
         self.base_url = base_url.rstrip("/")
-        self.headers = {
-            "X-MCP-Token": token,
-            "Content-Type": "application/json"
-        }
+        self.token = token
+        self.iap_token = iap_token
+        self._refresh_headers()
         self.tickets: dict[str, dict[str, Any]] = {
             "INC-10001": {
                 "ticket_id": "INC-10001",
-                "requested_by": "EMP1024",
+                "requested_by": "gunjangarg",
                 "category": "Hardware",
                 "short_description": "Laptop screen flickering",
                 "priority": "3 - Moderate",
@@ -39,6 +38,22 @@ class ITSMClient:
                 "created_at": time.time() - 3600
             }
         }
+        
+    def _refresh_headers(self):
+        self.headers = {
+            "X-MCP-Token": self.token,
+            "Content-Type": "application/json"
+        }
+        if self.iap_token:
+            self.headers["Proxy-Authorization"] = f"Bearer {self.iap_token}"
+            self.headers["Authorization"] = f"Bearer {self.iap_token}"
+
+    def set_token(self, token: str, iap_token: Optional[str] = None):
+        """Updates the MCP token dynamically."""
+        self.token = token
+        if iap_token is not None:
+            self.iap_token = iap_token
+        self._refresh_headers()
         
     def list_tickets(self, employee_id: str) -> list[dict[str, Any]]:
         """Lists incidents requested by caller employee."""
@@ -86,7 +101,7 @@ class ITSMClient:
             "state": "New",
             "assignment_group": assignment_group,
             "priority": priority,
-            "message": f"Ticket #{ticket_id} created successfully with assignment group '{assignment_group}'."
+            "message": f"Ticket #{ticket_id} created successfully via ServiceImmediately FastMCP."
         }
         
     def add_ticket_comment(self, ticket_id: str, author: str, comment: str) -> dict[str, Any]:

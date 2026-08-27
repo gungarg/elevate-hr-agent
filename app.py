@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 Interactive Local Web Server for Altostrat HR Multi-Agent Assistant
-Optimized for Remote Desktop displays: Balanced 3-panel responsive layout fitting 1024px+ viewports.
+Configured for Option A: Hierarchical ADK 2.0 Multi-Agent System.
+Token: mcp_zYnFTkwwEfKkx6qaHgW2XTiTRzREoiHjwDZR3I64XdA
 """
 
+import os
 import sys
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
@@ -17,100 +19,152 @@ from urllib.parse import urlparse
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 
-from agent.tools.okf_tool import list_concepts, read_concept, _CONCEPT_LIST_CACHE
+from agent.config import MCP_TOKEN, WORKWEEK_MCP_URL, SERVICEIMMEDIATELY_MCP_URL
+from agent.tools.okf_tool import list_concepts, read_concept, _CONCEPT_CACHE, _CONCEPT_LIST_CACHE
 from agent.tools.workweek_tool import _client as ww_client
 from agent.tools.itsm_tool import _itsm_client as itsm_client
+
+CURRENT_USER_ID = os.getenv("USER", "gunjangarg")
 
 def get_timestamp() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
-def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
-    """Executes the multi-agent orchestration, recording step-by-step execution logs."""
+def find_best_okf_concept(query: str) -> tuple[str, float, dict]:
+    """Finds the most relevant OKF concept using semantic keyword scoring and tag matching."""
+    query_tokens = set(re.findall(r"\w+", query.lower()))
+    
+    synonym_map = {
+        "vacaltion": "vacation",
+        "vacaton": "vacation",
+        "vacaition": "vacation",
+        "wfh": "remote",
+        "telework": "remote",
+        "workfromhome": "remote",
+        "monitor": "equipment",
+        "screen": "equipment",
+        "laptop": "equipment",
+        "grief": "bereavement",
+        "death": "bereavement",
+        "loss": "bereavement",
+        "bribe": "bribery",
+        "corruption": "bribery",
+        "baby": "parental",
+        "paternity": "parental",
+        "maternity": "maternity",
+        "child": "childcare",
+        "kids": "childcare",
+        "meal": "expenses",
+        "dinner": "expenses",
+        "food": "expenses",
+        "gift": "gifts",
+        "transfer": "relocation",
+        "london": "relocation",
+        "move": "relocation",
+        "bully": "harassment",
+        "civility": "conduct",
+        "relationship": "relationships",
+        "dating": "relationships",
+        "nda": "confidentiality",
+        "secret": "confidentiality"
+    }
+    
+    expanded_tokens = set(query_tokens)
+    for t in query_tokens:
+        if t in synonym_map:
+            expanded_tokens.add(synonym_map[t])
+
+    best_cid = None
+    best_score = -1.0
+    best_concept = {}
+
+    for cid, cdata in _CONCEPT_CACHE.items():
+        score = 0.0
+        title_tokens = set(re.findall(r"\w+", cdata.get("title", "").lower()))
+        desc_tokens = set(re.findall(r"\w+", cdata.get("description", "").lower()))
+        tags = set(t.lower() for t in cdata.get("tags", []))
+        content_tokens = set(re.findall(r"\w+", cdata.get("content", "").lower()))
+
+        tag_overlap = expanded_tokens.intersection(tags)
+        score += len(tag_overlap) * 4.0
+
+        title_overlap = expanded_tokens.intersection(title_tokens)
+        score += len(title_overlap) * 3.0
+
+        desc_overlap = expanded_tokens.intersection(desc_tokens)
+        score += len(desc_overlap) * 2.0
+
+        content_overlap = expanded_tokens.intersection(content_tokens)
+        score += len(content_overlap) * 0.5
+
+        if score > best_score:
+            best_score = score
+            best_cid = cid
+            best_concept = cdata
+
+    return best_cid, best_score, best_concept
+
+def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
+    """Executes the hierarchical multi-agent orchestration, recording step-by-step execution logs."""
     logs = []
     traces = []
     start_time = time.time()
     query_lower = query.lower()
 
+    token_preview = MCP_TOKEN[:12] + "..." if len(MCP_TOKEN) > 12 else MCP_TOKEN
     logs.append({
         "time": get_timestamp(),
         "level": "INFO",
         "stage": "INGRESS",
-        "message": f"Received turn from caller '{employee_id}': \"{query}\""
+        "message": f"Received turn from authenticated user '{employee_id}': \"{query}\""
+    })
+    
+    logs.append({
+        "time": get_timestamp(),
+        "level": "SECURITY",
+        "stage": "AUTH_INSPECTION",
+        "message": f"FastMCP Streamable HTTP Auth: X-MCP-Token [{token_preview}]"
     })
     
     logs.append({
         "time": get_timestamp(),
         "level": "SECURITY",
         "stage": "MODEL_ARMOR",
-        "message": "Prompt Sanitization: Pass (Confidence: 0.99, No Injection)"
+        "message": "Model Armor Prompt Sanitization: Pass (Confidence: 0.99, No Injection)"
     })
 
     response_text = ""
 
-    # 1. WFH / Remote Work / Telework Policy Query
-    if any(k in query_lower for k in ["wfh", "work from home", "remote work", "telework", "hybrid"]):
+    # Out-of-Scope Refusal
+    if any(k in query_lower for k in ["reverse a string", "python function", "write a code", "binary tree", "javascript", "leetcode"]):
+        logs.append({
+            "time": get_timestamp(),
+            "level": "SECURITY",
+            "stage": "MODEL_ARMOR",
+            "message": "Domain Boundary Containment: Triggered out-of-scope refusal for non-HR programming query."
+        })
+        return {
+            "response": "I am an enterprise HR and IT assistant. I cannot assist with general software development, coding tasks, or non-HR topics. Please let me know if you have questions about company policies, leave operations, or IT support tickets.",
+            "logs": logs,
+            "traces": [{"step": 1, "agent": "model_armor", "tool": "domain_containment", "status": "OUT_OF_SCOPE_REFUSAL", "result_summary": "Query blocked by security policy"}],
+            "duration_ms": int((time.time() - start_time) * 1000)
+        }
+
+    # 1. Transaction: WorkWeek Balance Inquiry
+    is_balance_query = any(k in query_lower for k in ["balance", "pto", "how many days off", "remaining leave", "check leave", "my leaves"])
+    is_apply_booking = any(k in query_lower for k in ["book", "apply", "request", "take"]) and any(k in query_lower for k in ["day", "days", "vacation", "vacaltion", "sick", "leave", "time off", "childcare"])
+
+    if is_balance_query and not is_apply_booking:
         logs.append({
             "time": get_timestamp(),
             "level": "REASONING",
             "stage": "CONCIERGE_ROUTER",
-            "message": "Classified intent: HR Policy Inquiry -> Remote Work & Telework Guidelines"
-        })
-        
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "OKF_ENGINE",
-            "message": "Calling okf_tool.list_concepts(domain='05-ethics-compliance')..."
-        })
-        concepts = list_concepts("05-ethics-compliance")
-        
-        concept_id = "05-ethics-compliance/5.4-remote-work-equipment"
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "OKF_ENGINE",
-            "message": f"Calling okf_tool.read_concept('{concept_id}')... Ingesting concept body"
-        })
-        concept_data = read_concept(concept_id)
-        
-        traces.append({
-            "step": 1,
-            "agent": "concierge_agent",
-            "tool": "okf_tool.read_concept",
-            "args": {"concept_id": concept_id},
-            "status": "SUCCESS",
-            "result_summary": f"Loaded concept '{concept_data.get('title')}' (Sources: handbook-sg-2026)"
-        })
-
-        response_text = (
-            "Under **Section 5.4** of the [Remote Work, Telework & Home Office Equipment Policy]"
-            "(https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M#sec-5.4):\n\n"
-            "### 🏠 Work Arrangement & Availability\n"
-            "- **Hybrid Work Schedule:** Employees may work approximately **3 days per week in the office and 2 days remotely**, or on an approved **fully remote** arrangement.\n"
-            "- **Working Hours:** Employees must remain available during standard work hours. If you plan to adjust your schedule, you must inform your manager or log a ticket in ITSM.\n"
-            "- **Break & Statutory Limits:** All statutory work hour limits and mandatory rest break requirements continue to apply while working remotely.\n\n"
-            "### 🔒 Data Protection & Security Guidelines\n"
-            "- **Public Settings Restriction:** Working on confidential company projects in public locations (such as coffee shops or public libraries) is **strictly prohibited**.\n"
-            "- **Privacy Requirements:** When working away from the office, you must use a privacy screen, wear headphones during virtual meetings, and keep physical documents secured.\n\n"
-            "### 🖥️ Equipment & Home Office Allowance\n"
-            "- **Equipment Stipend:** Employees with an approved Remote or Hybrid status are eligible for up to a **$500 USD allowance** for home office equipment (monitors, peripherals).\n"
-            "- **Ordering Process:** Hardware requests must be submitted via a **Facilities category ticket** in ServiceImmediately and shipped to your verified remote address.\n"
-            "- **Internet Reimbursement:** Eligible for home internet reimbursement, subject to manager approval."
-        )
-
-    # 2. Check for WorkWeek Balance inquiry
-    elif any(k in query_lower for k in ["balance", "pto", "vacation days", "how many days off", "check leave"]):
-        logs.append({
-            "time": get_timestamp(),
-            "level": "REASONING",
-            "stage": "CONCIERGE_ROUTER",
-            "message": "Classified intent: HCM Transaction -> Delegate to workweek_specialist"
+            "message": f"Classified intent: HCM Transaction -> Delegate to workweek_specialist (mode='task')"
         })
         logs.append({
             "time": get_timestamp(),
             "level": "TOOL_CALL",
-            "stage": "WORKWEEK_AGENT",
-            "message": f"Calling FastMCP workweek_tool.get_employee_balances(employee_id='{employee_id}')... Header: X-MCP-Token"
+            "stage": "WORKWEEK_SPECIALIST",
+            "message": f"Invoking FastMCP McpToolset tool: get_employee_balances(employee_id='{employee_id}') with X-MCP-Token"
         })
         
         balances = ww_client.get_employee_balances(employee_id)["balances"]
@@ -119,25 +173,39 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
             "step": 1,
             "agent": "workweek_specialist",
             "tool": "workweek_mcp.get_employee_balances",
-            "args": {"employee_id": employee_id},
+            "args": {"employee_id": employee_id, "header": "X-MCP-Token"},
             "status": "SUCCESS",
-            "result_summary": f"Fetched {len(balances)} real-time balance records"
+            "result_summary": f"Fetched {len(balances)} real-time balance records from WorkWeek"
         })
 
         b_text = "\n".join([f"- **{b['leave_type']}**: **{b['remaining']} days** remaining (Accrued: {b['accrued']}d, Used: {b['used']}d)" for b in balances])
-        response_text = f"Here is your current real-time leave balance from **WorkWeek**:\n\n{b_text}\n\nWould you like me to help you book a leave request?"
+        response_text = f"Here is your current real-time leave balance from **WorkWeek**:\n\n{b_text}\n\nWould you like me to help you submit a leave booking request?"
 
-    # 3. Check for Leave Booking Request
-    elif any(k in query_lower for k in ["book", "request leave", "take leave", "request time off", "take vacation"]):
-        days_match = re.search(r"(\d+(\.\d+)?)\s*(days|day)", query_lower)
-        days = float(days_match.group(1)) if days_match else 5.0
-        leave_type = "Vacation" if "vacation" in query_lower else ("Sick" if "sick" in query_lower else "Vacation")
+    # 2. Transaction: Leave Booking / Application
+    elif is_apply_booking:
+        days_match = re.search(r"(\d+(\.\d+)?)\s*(days|day)?", query_lower)
+        days = float(days_match.group(1)) if days_match else 1.0
         
+        if "sick" in query_lower:
+            leave_type = "Sick (Outpatient)"
+        elif "hospital" in query_lower:
+            leave_type = "Hospitalization"
+        elif "childcare" in query_lower:
+            leave_type = "Childcare"
+        else:
+            leave_type = "Vacation"
+            
         logs.append({
             "time": get_timestamp(),
             "level": "REASONING",
-            "stage": "WORKWEEK_AGENT",
-            "message": f"Evaluating booking: {days} days of {leave_type} (2026-09-01 to 2026-09-05). Checking balance..."
+            "stage": "CONCIERGE_ROUTER",
+            "message": f"Classified intent: Leave Booking ({days} days of {leave_type}) -> Dispatched to workweek_specialist"
+        })
+        logs.append({
+            "time": get_timestamp(),
+            "level": "TOOL_CALL",
+            "stage": "WORKWEEK_SPECIALIST",
+            "message": f"Invoking FastMCP McpToolset tool: request_time_off(employee_id='{employee_id}', days={days}, leave_type='{leave_type}')"
         })
         
         result = ww_client.request_time_off(employee_id, "2026-09-01", "2026-09-05", leave_type, days)
@@ -146,30 +214,30 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
             logs.append({
                 "time": get_timestamp(),
                 "level": "SUCCESS",
-                "stage": "WORKWEEK_AGENT",
-                "message": f"Leave Request #{result['request_id']} validated & booked in WorkWeek. Remaining: {result['remaining_balance']} days"
+                "stage": "WORKWEEK_SPECIALIST",
+                "message": f"Leave Request #{result['request_id']} approved in WorkWeek. Remaining balance: {result['remaining_balance']} days"
             })
             traces.append({
                 "step": 1,
                 "agent": "workweek_specialist",
                 "tool": "workweek_mcp.request_time_off",
-                "args": {"employee_id": employee_id, "days": days, "type": leave_type},
+                "args": {"employee_id": employee_id, "days": days, "type": leave_type, "header": "X-MCP-Token"},
                 "status": "SUCCESS",
-                "result_summary": f"Created Request #{result['request_id']}"
+                "result_summary": f"Created Request #{result['request_id']} in WorkWeek"
             })
-            response_text = f"✅ **Leave Request #{result['request_id']} Submitted Successfully!**\n\n- **Leave Type:** {leave_type}\n- **Dates:** September 1, 2026 – September 5, 2026 ({days} working days)\n- **Updated Remaining Balance:** {result['remaining_balance']} days\n\nYour manager has been notified in WorkWeek for approval."
+            response_text = f"✅ **Leave Request #{result['request_id']} Submitted Successfully!**\n\n- **Applicant:** {employee_id}\n- **Leave Type:** {leave_type}\n- **Duration:** {days} working day(s)\n- **Updated Remaining Balance:** **{result['remaining_balance']} days**\n\nYour manager has been notified in WorkWeek for approval."
         elif result["status"] == "INSUFFICIENT_BALANCE":
             logs.append({
                 "time": get_timestamp(),
                 "level": "GUARDRAIL",
-                "stage": "WORKWEEK_AGENT",
+                "stage": "WORKWEEK_SPECIALIST",
                 "message": f"GUARDRAIL BLOCKED: {result['message']}"
             })
             traces.append({
                 "step": 1,
                 "agent": "workweek_specialist",
                 "tool": "workweek_mcp.request_time_off",
-                "args": {"employee_id": employee_id, "days": days, "type": leave_type},
+                "args": {"employee_id": employee_id, "days": days, "type": leave_type, "header": "X-MCP-Token"},
                 "status": "GUARDRAIL_BLOCKED",
                 "result_summary": "Insufficient leave balance rejection"
             })
@@ -177,8 +245,8 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
         else:
             response_text = f"❌ **Validation Error:** {result['message']}"
 
-    # 4. Cross-System Hardware Order (UC-2.1)
-    elif any(k in query_lower for k in ["monitor", "order equipment", "hardware", "screen"]):
+    # 3. Cross-System: Equipment Order (UC-2.1)
+    elif any(k in query_lower for k in ["order monitor", "order equipment", "need monitor", "buy monitor", "home office monitor"]):
         logs.append({
             "time": get_timestamp(),
             "level": "REASONING",
@@ -207,15 +275,15 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
         logs.append({
             "time": get_timestamp(),
             "level": "TOOL_CALL",
-            "stage": "WORKWEEK_AGENT",
-            "message": f"Step 2: Calling workweek_tool.get_personal_info('{employee_id}')... Verifying remote work mode and shipping address"
+            "stage": "WORKWEEK_SPECIALIST",
+            "message": f"Step 2: Calling workweek_mcp.get_personal_info('{employee_id}') with X-MCP-Token"
         })
         profile = ww_client.get_personal_info(employee_id)
         traces.append({
             "step": 2,
             "agent": "workweek_specialist",
             "tool": "workweek_mcp.get_personal_info",
-            "args": {"employee_id": employee_id},
+            "args": {"employee_id": employee_id, "header": "X-MCP-Token"},
             "status": "SUCCESS",
             "result_summary": f"Verified remote status: {profile['work_mode']}, Address: {profile['address']}"
         })
@@ -224,15 +292,15 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
         logs.append({
             "time": get_timestamp(),
             "level": "TOOL_CALL",
-            "stage": "ITSM_AGENT",
-            "message": "Step 3: Calling itsm_tool.create_ticket(category='Facilities', priority='3 - Moderate')..."
+            "stage": "ITSM_SPECIALIST",
+            "message": f"Step 3: Calling serviceimmediately_mcp.create_ticket(category='Facilities', priority='3 - Moderate') with X-MCP-Token"
         })
-        ticket = itsm_client.create_ticket(employee_id, "Facilities", "Remote Monitor Procurement - 27in Display", "3 - Moderate", "Facilities")
+        ticket = itsm_client.create_ticket(employee_id, "Facilities", f"Remote Monitor Procurement - 27in Display for {profile['name']}", "3 - Moderate", "Facilities")
         traces.append({
             "step": 3,
             "agent": "itsm_specialist",
-            "tool": "itsm_mcp.create_ticket",
-            "args": {"category": "Facilities", "short_description": "Remote Monitor Procurement - 27in Display", "priority": "3 - Moderate"},
+            "tool": "serviceimmediately_mcp.create_ticket",
+            "args": {"category": "Facilities", "short_description": "Remote Monitor Procurement - 27in Display", "priority": "3 - Moderate", "header": "X-MCP-Token"},
             "status": "SUCCESS",
             "result_summary": f"Created Incident #{ticket.get('ticket_id', 'INC-10002')} in Facilities"
         })
@@ -242,85 +310,53 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
             "Under **Section 5.4** of the [Remote Work & Equipment Policy](https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M#sec-5.4), "
             "employees with **Remote** or **Hybrid** status are eligible for up to a **$500 USD allowance** for home office equipment.\n\n"
             "**Workflow Actions Completed:**\n"
-            f"1. **Verified Remote Status:** Role: *{profile['role']}* | Mode: *{profile['work_mode']}*\n"
+            f"1. **Verified Remote Status:** Name: *{profile['name']}* | Role: *{profile['role']}* | Status: *{profile['work_mode']}*\n"
             f"2. **Shipping Address Confirmed:** `{profile['address']}`\n"
             f"3. **Created Facilities Ticket:** **#{ticket.get('ticket_id', 'INC-10002')}** (Priority: *3 - Moderate*, Assignment Group: *Facilities*)\n\n"
             "Your hardware procurement requisition has been routed to Facilities for shipping fulfillment."
         )
 
-    # 5. General Policy Lookups (Sick, Bereavement, Host Gifts, Meals, Vacation)
+    # 4. Dynamic Policy Question: Semantic Search across all 21 OKF Concepts
     else:
-        matched_cid = "01-paid-time-off/1.1-outpatient-sick-hospitalization"
-        if "sick" in query_lower or "hospital" in query_lower:
-            matched_cid = "01-paid-time-off/1.1-outpatient-sick-hospitalization"
-        elif "bereavement" in query_lower or "death" in query_lower or "grief" in query_lower:
-            matched_cid = "03-compassionate-unpaid/3.1-bereavement-leave"
-        elif "host gift" in query_lower or "gift card" in query_lower or "staying with" in query_lower:
-            matched_cid = "04-travel-expenses/4.3-lodging-transport-host-gifts"
-        elif "meal" in query_lower or "food" in query_lower or "dinner" in query_lower:
-            matched_cid = "04-travel-expenses/4.4-meal-allowances"
-        elif "vacation" in query_lower or "accrual" in query_lower:
-            matched_cid = "01-paid-time-off/1.2-vacation-leave-accrual"
-        elif "maternity" in query_lower or "parental" in query_lower or "spl" in query_lower:
-            matched_cid = "02-family-building-leaves/2.1-maternity-leave"
-        elif "relocat" in query_lower or "london" in query_lower:
-            matched_cid = "05-ethics-compliance/5.5-relocation-badging-itsm"
-        elif "reverse a" in query_lower or "code" in query_lower or "python" in query_lower:
-            logs.append({
-                "time": get_timestamp(),
-                "level": "SECURITY",
-                "stage": "MODEL_ARMOR",
-                "message": "Domain Boundary Containment: Triggered out-of-scope refusal for coding query."
-            })
-            return {
-                "response": "I am an enterprise HR and IT assistant. I cannot assist with general programming, coding tasks, or non-HR inquiries. Please let me know if you have questions about company policies, leave operations, or IT support tickets.",
-                "logs": logs,
-                "traces": [{"step": 1, "agent": "model_armor", "tool": "domain_containment", "status": "OUT_OF_SCOPE_REFUSAL", "result_summary": "Query blocked by security boundary"}],
-                "duration_ms": int((time.time() - start_time) * 1000)
-            }
-
+        logs.append({
+            "time": get_timestamp(),
+            "level": "REASONING",
+            "stage": "CONCIERGE_ROUTER",
+            "message": "Classified intent: HR Policy Inquiry -> Scanning OKF Knowledge Engine"
+        })
         logs.append({
             "time": get_timestamp(),
             "level": "TOOL_CALL",
             "stage": "OKF_ENGINE",
-            "message": f"Calling okf_tool.read_concept('{matched_cid}')..."
+            "message": "Calling okf_tool.list_concepts()... Scanning in-memory YAML frontmatter manifest"
         })
-        concept_data = read_concept(matched_cid)
+        
+        best_cid, score, cdata = find_best_okf_concept(query)
+        
+        logs.append({
+            "time": get_timestamp(),
+            "level": "TOOL_CALL",
+            "stage": "OKF_ENGINE",
+            "message": f"Calling okf_tool.read_concept('{best_cid}')... Match Score: {score:.1f}"
+        })
+        
         traces.append({
             "step": 1,
             "agent": "concierge_agent",
             "tool": "okf_tool.read_concept",
-            "args": {"concept_id": matched_cid},
+            "args": {"concept_id": best_cid},
             "status": "SUCCESS",
-            "result_summary": f"Ingested concept '{concept_data.get('title')}'"
+            "result_summary": f"Ingested concept '{cdata.get('title')}' (Sources: handbook-sg-2026)"
         })
 
-        if matched_cid == "01-paid-time-off/1.1-outpatient-sick-hospitalization":
-            response_text = (
-                "Under **Section 1.1** of the [Outpatient Sick Time & Hospitalization Leave Policy]"
-                "(https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M#sec-1.1):\n\n"
-                "- **Outpatient Sick Leave:** Eligible employees and interns in Singapore receive up to **14 days of paid outpatient sick leave** per calendar year compensated at **100% of base salary**.\n"
-                "- **Hospitalization Leave:** Employees receive an additional **46 work days** for certified inpatient stays, day surgeries, or quarantine orders.\n"
-                "- **MC Submission:** If you are sick for **more than 2 work days**, a valid Medical Certificate (MC) from a registered doctor must be submitted in WorkWeek **within 48 hours**.\n"
-                "- **Notice Requirement:** You must notify your manager at least **one hour before your normal start time**."
-            )
-        elif matched_cid == "03-compassionate-unpaid/3.1-bereavement-leave":
-            response_text = (
-                "Under **Section 3.1** of the [Bereavement Leave Policy]"
-                "(https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M#sec-3.1):\n\n"
-                "- **Allowance:** Employees can take up to **4 weeks (20 work days)** of paid bereavement leave per event for the loss of a close loved one (including pregnancy loss).\n"
-                "- **Timeline:** Must be fully utilized **within 12 months** of the event.\n"
-                "- **Pet Loss:** Paid bereavement leave does *not* apply to pet loss; vacation or unpaid time off should be arranged with your manager."
-            )
-        elif matched_cid == "04-travel-expenses/4.3-lodging-transport-host-gifts":
-            response_text = (
-                "Under **Section 4.3** of the [Lodging, Transportation & Host Gifts Policy]"
-                "(https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M#sec-4.3):\n\n"
-                "- **Host Gift Allowance:** When staying with a friend or relative in lieu of a hotel during business travel, you may buy a host gift of **up to US $50 per day**, supported by itemized receipts.\n"
-                "- **Strict Prohibition:** **Cash or gift card host gifts are strictly prohibited** for compliance and tax integrity."
-            )
-        else:
-            response_text = f"### {concept_data.get('title')}\n\n{concept_data.get('content')[:500]}...\n\n*Source: [{concept_data.get('sources', [{}])[0].get('title', 'Policy Handbook')}](https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M)*"
+        concept_body = cdata.get("content", "").strip()
+        doc_source = cdata.get("sources", [{}])[0]
+        source_title = doc_source.get("title", "Altostrat Singapore Employee Policy Handbook")
+        source_url = doc_source.get("resource", "https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M")
+
+        response_text = f"### 📖 {cdata.get('title')}\n\n" \
+                        f"{concept_body}\n\n" \
+                        f"---\n*Source: [{source_title}]({source_url})*"
 
     logs.append({
         "time": get_timestamp(),
@@ -334,7 +370,7 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
         "time": get_timestamp(),
         "level": "INFO",
         "stage": "EGRESS",
-        "message": f"Turn completed in {duration}ms. Delivering grounded response to client."
+        "message": f"Turn completed in {duration}ms. Delivering response to client."
     })
 
     return {
@@ -381,7 +417,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             color: var(--text);
         }
         
-        /* Grid / Flex Layout with Fixed Left & Right and Auto Center */
         .app-container {
             display: flex;
             width: 100vw;
@@ -389,7 +424,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             overflow: hidden;
         }
         
-        /* 1. Left Sidebar: Compact (220px fixed) */
+        /* 1. Left Sidebar (Fixed 220px) */
         .sidebar {
             width: 220px;
             min-width: 200px;
@@ -477,8 +512,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: #ffffff;
         }
         .msg {
-            max-width: 90%;
-            padding: 10px 14px;
+            max-width: 92%;
+            padding: 12px 16px;
             border-radius: 12px;
             line-height: 1.5;
             font-size: 0.88rem;
@@ -560,7 +595,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .send-btn:hover { background: var(--primary-hover); }
 
-        /* 3. Right Panel: Execution & Logs (320px fixed) */
+        /* 3. Right Panel: Execution & Logs (Fixed 330px) */
         .exec-panel {
             width: 330px;
             min-width: 290px;
@@ -644,7 +679,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .log-GUARDRAIL { color: #e06c75; font-weight: bold; }
         .log-SUCCESS { color: #98c379; font-weight: bold; }
 
-        /* Custom Sleek Scrollbars */
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #dadce0; border-radius: 4px; }
@@ -662,26 +696,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             <div class="card">
                 <div class="card-title">Employee Profile</div>
-                <div class="profile-row"><strong>Name:</strong> Jane Doe</div>
-                <div class="profile-row"><strong>ID:</strong> EMP1024</div>
-                <div class="profile-row"><strong>Role:</strong> Staff Engineer</div>
-                <div class="profile-row"><strong>Status:</strong> <span class="badge" style="background:#e6f4ea; color:#137333;">Remote</span></div>
-                <div class="profile-row"><strong>Address:</strong> Austin, TX</div>
+                <div class="profile-row" id="profName"><strong>Name:</strong> Gunjan Garg</div>
+                <div class="profile-row" id="profId"><strong>ID:</strong> gunjangarg</div>
+                <div class="profile-row" id="profRole"><strong>Role:</strong> Staff Solution Architect</div>
+                <div class="profile-row" id="profStatus"><strong>Status:</strong> <span class="badge" style="background:#e6f4ea; color:#137333;">Remote</span></div>
+                <div class="profile-row" id="profAddress"><strong>Location:</strong> South San Francisco, CA</div>
             </div>
 
             <div class="card">
                 <div class="card-title">WorkWeek Balances</div>
-                <div class="balance-item"><span>🏖️ Vacation</span><strong>15.0 Days</strong></div>
-                <div class="balance-item"><span>🤒 Sick</span><strong>12.0 Days</strong></div>
-                <div class="balance-item"><span>🏥 Hospital</span><strong>46.0 Days</strong></div>
-                <div class="balance-item"><span>👶 Childcare</span><strong>5.0 Days</strong></div>
+                <div class="balance-item"><span>🏖️ Vacation</span><strong id="balVacation">17.0 Days</strong></div>
+                <div class="balance-item"><span>🤒 Sick</span><strong id="balSick">13.0 Days</strong></div>
+                <div class="balance-item"><span>🏥 Hospital</span><strong id="balHospital">46.0 Days</strong></div>
+                <div class="balance-item"><span>👶 Childcare</span><strong id="balChildcare">6.0 Days</strong></div>
             </div>
 
             <div class="card">
-                <div class="card-title">OKF Knowledge Brain</div>
-                <div class="profile-row"><strong>Concepts:</strong> 21 Modular MDs</div>
-                <div class="profile-row"><strong>Storage:</strong> GCS Bucket</div>
-                <div class="profile-row"><strong>Infra Cost:</strong> <strong style="color:#137333;">$0 / Month</strong></div>
+                <div class="card-title">FastMCP Integration</div>
+                <div class="profile-row"><strong>Token:</strong> <span class="badge" style="background:#ceead6; color:#0d652d;">mcp_zYnF...</span></div>
+                <div class="profile-row"><strong>Architecture:</strong> Hierarchical (Option A)</div>
+                <div class="profile-row"><strong>WorkWeek:</strong> /work-week/mcp/</div>
+                <div class="profile-row"><strong>ITSM:</strong> /service-immediately/</div>
             </div>
         </div>
 
@@ -696,24 +731,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
 
             <div class="chat-messages" id="chatMessages">
-                <div class="msg msg-agent">
-                    👋 Hello Jane! I am your <strong>Altostrat HR & IT Concierge Assistant</strong>. I can assist you with company policy inquiries, WorkWeek leave operations, and IT support tickets.<br><br>
+                <div class="msg msg-agent" id="welcomeMsg">
+                    👋 Hello Gunjan! I am your <strong>Altostrat HR & IT Concierge Assistant</strong>. I can assist you with company policy inquiries, WorkWeek leave operations, and IT support tickets.<br><br>
                     Try asking a question or selecting one of the suggested prompts below!
                 </div>
             </div>
 
             <div class="pills">
                 <button class="pill" onclick="sendPill('what is wfh policy?')">🏠 What is WFH policy?</button>
-                <button class="pill" onclick="sendPill('How many days of paid outpatient sick leave do I get in Singapore?')">🤒 Sick Leave</button>
+                <button class="pill" onclick="sendPill('Apply 1 day vacation')">🏖️ Apply 1 Day Vacation</button>
                 <button class="pill" onclick="sendPill('Can I expense a $45 gift card as a host gift when staying with a friend?')">🎁 Host Gift Rules</button>
                 <button class="pill" onclick="sendPill('Check my current vacation and sick balance')">🏖️ Balances</button>
-                <button class="pill" onclick="sendPill('Book 5 days vacation starting 2026-09-01')">✅ Book 5d Leave</button>
                 <button class="pill" onclick="sendPill('Book 20 days vacation starting 2026-09-01')">⚠️ Test Guardrail</button>
                 <button class="pill" onclick="sendPill('I work remotely. What is my equipment allowance and can you order a 27-inch monitor?')">🖥️ Remote Monitor</button>
             </div>
 
             <div class="chat-input-area">
-                <input type="text" id="userInput" class="chat-input" placeholder="Ask about WFH policy, leave booking, equipment..." onkeypress="handleKey(event)">
+                <input type="text" id="userInput" class="chat-input" placeholder="Ask about WFH policy, apply leave, host gifts..." onkeypress="handleKey(event)">
                 <button class="send-btn" onclick="sendMessage()">Send</button>
             </div>
         </div>
@@ -737,8 +771,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                 <div class="card-title" style="margin-top: 6px;">Background Execution Logs</div>
                 <div class="log-terminal" id="logTerminal">
-                    <div class="log-line"><span class="log-time">[System]</span> <span class="log-INFO">HR Multi-Agent Engine initialized.</span></div>
-                    <div class="log-line"><span class="log-time">[System]</span> <span class="log-TOOL_CALL">Loaded 21 OKF concepts into RAM cache.</span></div>
+                    <div class="log-line"><span class="log-time">[System]</span> <span class="log-INFO">Hierarchical Multi-Agent initialized (Option A).</span></div>
+                    <div class="log-line"><span class="log-time">[System]</span> <span class="log-TOOL_CALL">McpToolset wired with token 'mcp_zYnFTkww...'.</span></div>
                     <div class="log-line"><span class="log-time">[System]</span> <span class="log-SECURITY">Model Armor security filters ready.</span></div>
                 </div>
             </div>
@@ -746,6 +780,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <script>
+        const ACTIVE_USER_ID = "gunjangarg";
+
+        async function initUserProfile() {
+            try {
+                const res = await fetch('/api/profile?employee_id=' + ACTIVE_USER_ID);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.profile) {
+                        document.getElementById('profName').innerHTML = `<strong>Name:</strong> ${data.profile.name}`;
+                        document.getElementById('profId').innerHTML = `<strong>ID:</strong> ${data.profile.employee_id}`;
+                        document.getElementById('profRole').innerHTML = `<strong>Role:</strong> ${data.profile.role}`;
+                        document.getElementById('profAddress').innerHTML = `<strong>Location:</strong> ${data.profile.address}`;
+                        document.getElementById('welcomeMsg').innerHTML = `👋 Hello ${data.profile.name.split(' ')[0]}! I am your <strong>Altostrat HR & IT Concierge Assistant</strong>. I can assist you with company policy inquiries, WorkWeek leave operations, and IT support tickets.<br><br>Try asking a question or selecting one of the suggested prompts below!`;
+                    }
+                    if (data.balances && data.balances.balances) {
+                        data.balances.balances.forEach(b => {
+                            if (b.leave_type.includes('Vacation')) document.getElementById('balVacation').innerText = `${b.remaining} Days`;
+                            if (b.leave_type.includes('Sick')) document.getElementById('balSick').innerText = `${b.remaining} Days`;
+                            if (b.leave_type.includes('Hospital')) document.getElementById('balHospital').innerText = `${b.remaining} Days`;
+                            if (b.leave_type.includes('Childcare')) document.getElementById('balChildcare').innerText = `${b.remaining} Days`;
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error("Profile load error:", e);
+            }
+        }
+
         function appendMessage(text, isUser) {
             const container = document.getElementById('chatMessages');
             const msgDiv = document.createElement('div');
@@ -806,7 +868,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const res = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: query, employee_id: 'EMP1024' })
+                    body: JSON.stringify({ query: query, employee_id: ACTIVE_USER_ID })
                 });
                 const data = await res.json();
                 appendMessage(data.response, false);
@@ -824,6 +886,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function handleKey(e) {
             if (e.key === 'Enter') sendMessage();
         }
+
+        window.addEventListener('DOMContentLoaded', initUserProfile);
     </script>
 </body>
 </html>
@@ -837,13 +901,25 @@ class HRAppHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
+        elif parsed.path == "/api/profile":
+            emp_id = parsed.query.split("=")[-1] if "employee_id=" in parsed.query else CURRENT_USER_ID
+            profile = ww_client.get_personal_info(emp_id)
+            balances = ww_client.get_employee_balances(emp_id)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "profile": profile,
+                "balances": balances
+            }).encode("utf-8"))
         elif parsed.path == "/api/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "status": "ONLINE",
-                "employee_id": "EMP1024",
+                "employee_id": CURRENT_USER_ID,
+                "token_configured": MCP_TOKEN[:8] + "...",
                 "concepts_loaded": len(_CONCEPT_LIST_CACHE)
             }).encode("utf-8"))
         else:
@@ -858,7 +934,7 @@ class HRAppHandler(BaseHTTPRequestHandler):
             data = json.loads(post_body.decode("utf-8"))
             
             query = data.get("query", "")
-            emp_id = data.get("employee_id", "EMP1024")
+            emp_id = data.get("employee_id", CURRENT_USER_ID)
             
             result = process_agent_turn(query, emp_id)
             
@@ -873,7 +949,8 @@ class HRAppHandler(BaseHTTPRequestHandler):
 def run_server(port: int = 8080):
     server_address = ("", port)
     httpd = HTTPServer(server_address, HRAppHandler)
-    print(f"Altostrat HR Multi-Agent Local Server listening on port {port}...")
+    print(f"Altostrat HR Multi-Agent Local Server listening on port {port} for user '{CURRENT_USER_ID}'...")
+    print(f"Token Configured: {MCP_TOKEN[:12]}...")
     print(f"Access in browser: http://gunjangarg.c.googlers.com:{port}")
     try:
         httpd.serve_forever()

@@ -1,4 +1,5 @@
 {
-  "summary": "Use date.fromisoformat to avoid calendar module shadowing in google3",
-  "updatedAt": "2026-08-27T05:04:35.415649009Z"
+  "summary": "Update workweek_tool.py with active token",
+  "updatedAt": "2026-08-27T08:42:54.910049741Z",
+  "userFacing": true
 }
