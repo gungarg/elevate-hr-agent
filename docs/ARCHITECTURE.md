@@ -1,117 +1,90 @@
-# System Architecture: Enterprise HR Multi-Agent System (ADK 2.0 - v3.1)
+# System Architecture: Enterprise HR & IT Multi-Agent Assistant (Revision 4.0)
 
-## Overview
-The Enterprise HR Multi-Agent System provides seamless, AI-orchestrated access to HR policy documents, WorkWeek HCM self-service operations, and ServiceImmediately IT service desk management using **ADK 2.0**, **Vertex AI Agent Engine**, **Google Cloud Model Armor**, and a **GCS-Backed Open Knowledge Format (OKF)** knowledge engine.
+This document details the modernized technical architecture for the **Enterprise HR & IT Multi-Agent Assistant** built on **Google Agent Development Kit (ADK 2.0)**, deployed on **Vertex AI Agent Engine (Agent Runtime)**, powered by **Vertex AI Search (Enterprise Datastore)**, and integrated with **WorkWeek** and **ServiceImmediately** via **FastMCP Streamable HTTP**.
 
 ---
 
-## 1. System Topology & Data Flow
+## 1. System Topology Overview
 
 ```mermaid
-graph TD
-    Client[Web Chat Client / Enterprise Portal] --> Ingress[Cloud Armor WAF & HTTPS Load Balancer]
-    Ingress --> ModelArmor[Google Cloud Model Armor - Prompt Sanitization]
-    ModelArmor --> RootAgent[Concierge Agent - ADK 2.0 Orchestrator]
-
-    subgraph StateManagement [Secure State Management & Memoization]
-        RootAgent <--> StateStore[Context State: ctx.state\n* auth_context: Immutable Identity\n* turn_cache: Ephemeral Memoization]
-        RootAgent <--> SessionStore[VertexAiSessionService]
-        RootAgent <--> AgentGW[Agent Gateway & PSC Interface]
+flowchart TD
+    subgraph ClientLayer ["Client Ingress Layer"]
+        User["Enterprise Employee (Web Chat UI / Portal)"]
     end
 
-    subgraph OKFKnowledgeLayer [GCS-Backed Open Knowledge Format - OKF Engine]
-        RootAgent -->|list_concepts / read_concept| MemCache[In-Memory Concept Cache - RAM]
-        MemCache <-->|Pre-fetch & Sync| GCSBundle[("Google Cloud Storage (GCS)\ngs://<project>-hr-policies/knowledge/\n* 01-paid-time-off/\n* 02-expenses/\n* 03-remote-work/\n* 04-code-of-conduct/")]
+    subgraph SecurityGuardrails ["Google Cloud Model Armor (<50ms Managed Layer)"]
+        MA_Input["Model Armor - Ingress Filter\n* Prompt Injection & Jailbreak Defense\n* Toxicity & Malicious Content Filter\n* Domain Containment (Non-HR Refusal)"]
+        MA_Output["Model Armor - Egress Filter\n* Sensitive Data Protection (SDP/DLP)\n* SPII Redaction (SSN, Phone, Address)\n* Leakage Guard"]
     end
 
-    subgraph VertexAIAgentEngine [Vertex AI Agent Engine Execution Context]
-        RootAgent -->|request_task_workweek| WorkWeekAgent[WorkWeek Specialist - mode='task']
-        RootAgent -->|request_task_itsm| ITSMAgent[ITSM Specialist - mode='task']
-        WorkWeekAgent -.->|Optional Policy Self-Check| MemCache
-        WorkWeekAgent <--> StateStore
-        ITSMAgent <--> StateStore
+    subgraph OrchestrationLayer ["Vertex AI Agent Engine (ADK 2.0 Agent Runtime)"]
+        Concierge["Main Concierge Agent (Gemini 3.5 Flash)\n* Direct Tool: policy_search_tool\n* Sub-Agents: workweek_specialist, itsm_specialist"]
+        SessionStore["VertexAiSessionService\n* Immutable auth_context\n* Ephemeral turn_cache"]
     end
 
-    subgraph FastMCP Integration Subsystem [Streamable HTTP Transport]
-        WorkWeekAgent -->|Header: X-MCP-Token| WWMCP[WorkWeek FastMCP Server]
-        ITSMAgent -->|Header: X-MCP-Token| ITSMMCP[ServiceImmediately FastMCP Server]
+    subgraph KnowledgeTier ["Semantic Policy Retrieval Tier"]
+        VAS["Vertex AI Search (Enterprise Datastore)\n* Dense Vector + Lexical Hybrid Search\n* Neural Re-ranking & Auto Chunking\n* Source: gs://<project>-hr-policies/raw_docs/"]
     end
 
-    subgraph Enterprise Backends & Storage
-        WWMCP -->|REST API & DB| WWDB[(WorkWeek HCM Backend)]
-        ITSMMCP -->|REST API & DB| ITSMDB[(ServiceImmediately Backend)]
+    subgraph FastMCPIntegrations ["FastMCP Streamable HTTP SaaS Tier (X-MCP-Token)"]
+        WW_Agent["WorkWeek Specialist Agent (mode='task')\n* McpToolset: /work-week/mcp/"]
+        ITSM_Agent["ITSM Specialist Agent (mode='task')\n* McpToolset: /service-immediately/mcp/"]
+        
+        WW_SaaS[("WorkWeek Mock SaaS\n(Profiles, Balances, Bookings)")]
+        ITSM_SaaS[("ServiceImmediately Mock SaaS\n(Incidents, Comments, State Machine)")]
     end
 
-    subgraph Security & Governance
-        RootAgent --> OutputArmor[Model Armor - Output & SDP Masking]
-        OutputArmor --> Client
-        RootAgent -.-> AuditLog[(Cloud Logging - SPII Redacted)]
-        RootAgent -.-> CloudTrace[(Cloud Trace & BigQuery Analytics)]
-    end
+    User --> MA_Input
+    MA_Input --> Concierge
+    Concierge <--> SessionStore
+    Concierge <--> VAS
+    Concierge --> WW_Agent
+    Concierge --> ITSM_Agent
+    WW_Agent <-->|Streamable HTTP\nX-MCP-Token| WW_SaaS
+    ITSM_Agent <-->|Streamable HTTP\nX-MCP-Token| ITSM_SaaS
+    Concierge --> MA_Output
+    MA_Output --> User
 ```
 
 ---
 
-## 2. ADK 2.0 Component Breakdown
+## 2. Multi-Agent Topology & Delegations
 
-### A. Concierge Agent (Root Dispatcher & Policy Answerer)
-- **Framework:** `google.adk.agents.Agent` (ADK 2.0)
-- **Model:** `gemini-3.5-flash`
-- **Hosting:** Vertex AI Agent Engine (Agent Runtime)
-- **State Anchoring:** Extracts authenticated identity on turn entry and locks into `ctx.state["auth_context"]`.
-- **Direct Tools:** `list_concepts()` and `read_concept(concept_id)` operating over the in-memory GCS OKF cache.
-- **Functionality:** Answers HR policy questions deterministically in a single turn with exact footnote citations, delegates transactional tasks to specialized domain agents via typed `request_task_{name}` tools, manages multi-turn context with `VertexAiSessionService`, and compiles user-facing answers with clear confirmation cards.
+```
++---------------------------------------------------------------------------------------------------------------+
+|                                        AGENT DELEGATION TOPOLOGY                                              |
++---------------------------------------------------------------------------------------------------------------+
+|                                                                                                               |
+|                                       [Main Concierge Agent (Root)]                                           |
+|                                             (Gemini 3.5 Flash)                                                |
+|                                                      │                                                        |
+|                   ┌──────────────────────────────────┼──────────────────────────────────┐                     |
+|                   │ Direct Tool                      │ Task Delegation                  │ Task Delegation     |
+|                   ▼                                  ▼                                  ▼                     |
+|        [policy_search_tool]                [workweek_specialist]                [itsm_specialist]             |
+|    (Vertex AI Search Datastore)             (`mode="task"`)                      (`mode="task"`)              |
+|                   │                                  │                                  │                     |
+|                   │                                  ▼ Streamable HTTP                  ▼ Streamable HTTP     |
+|                   │                        [WorkWeek FastMCP Server]        [ServiceImmediately FastMCP]      |
+|                   │                         (/work-week/mcp/)                (/service-immediately/mcp/)      |
+|                                                                                                               |
++---------------------------------------------------------------------------------------------------------------+
+```
 
-### B. WorkWeek Specialist Agent (`mode="task"`)
-- **Model:** `gemini-3.5-flash`
-- **Output Schema:** `WorkWeekTaskOutput` (Pydantic model)
-- **State Integration:** Leverages `ctx.state["turn_cache"]` for base profile memoization within a single turn, eliminating duplicate REST round-trips in multi-step workflows (e.g. UC-2.1/2.3).
-- **FastMCP Tools (7/7):** `get_current_employee_id`, `get_personal_info`, `update_personal_info`, `get_employee_balances`, `request_time_off`, `get_leave_requests`, `cancel_leave_request`.
-- **FastMCP Resources (2/2):** `workweek://employees/{id}/profile`, `workweek://employees/{id}/timeoff`.
-- **REST APIs:** `PUT .../requests/{id}` (modify leave), `GET .../feedback` (feedback history).
-- **Guardrails:** Validates remaining leave balance prior to booking, enforces chronological date validation (`start_date >= today`, `start_date <= end_date`), and checks contact formatting.
-
-### C. ITSM Specialist Agent (`mode="task"`)
-- **Model:** `gemini-3.5-flash`
-- **Output Schema:** `ITSMTaskOutput` (Pydantic model)
-- **Identity Binding:** Binds `requested_by` strictly from `ctx.state["auth_context"]["employee_id"]` to prevent parameter tampering.
-- **FastMCP Tools (4/4):** `list_tickets`, `create_ticket`, `add_ticket_comment`, `update_ticket_status`.
-- **FastMCP Resources (1/1):** `serviceimmediately://tickets/{id}`.
-- **State Machine Guardrails:**
-  - `New -> In Progress/Closed` (Allowed)
-  - `In Progress -> Resolved/Closed` (Allowed)
-  - `Resolved -> In Progress/Closed` (Allowed)
-  - `Closed -> *` (Terminal / Blocked)
-  - 5-minute duplicate submission mitigation, Critical priority outage verification.
-
-### D. Google Cloud Model Armor (Security & Inspection)
-- **Input Sanitization:** Intercepts prompt injection, jailbreaks, malicious URLs, and toxicity before invoking LLMs ($<25\text{ms}$).
-- **Output Inspection & Sensitive Data Protection (SDP):** Scans model outputs, applies automated masking to SPII (SSNs, phone numbers, home addresses), and blocks data exfiltration ($<20\text{ms}$).
+1. **`concierge_agent` (Root Orchestrator):**  
+   Directly equipped with `policy_search_tool` (Vertex AI Search) to resolve policy questions in a single turn. Orchestrates multi-step workflows across specialists.
+2. **`workweek_specialist` (HCM Specialist):**  
+   Invoked in `mode="task"`, outputs typed `WorkWeekTaskOutput`. Uses native `McpToolset` connected to `/work-week/mcp/` with `X-MCP-Token`.
+3. **`itsm_specialist` (ITSM Specialist):**  
+   Invoked in `mode="task"`, outputs typed `ITSMTaskOutput`. Uses native `McpToolset` connected to `/service-immediately/mcp/` with `X-MCP-Token`.
 
 ---
 
-## 3. FastMCP Streamable HTTP Transport & Headers
+## 3. Key Design Decisions (Revision 4.0)
 
-Due to Google Frontend (GFE) intercepting standard Authorization headers, FastMCP connections require passing authentication tokens via `X-MCP-Token`:
-
-```python
-from google.adk.agents import Agent
-from google.adk.tools.mcp_tool import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
-
-# Connect to WorkWeek FastMCP server statelessly
-workweek_mcp = McpToolset(
-    connection_params=StreamableHTTPConnectionParams(
-        url="https://mock-saas.aishprabhat.demo.altostrat.com/work-week/mcp/",
-        headers={"X-MCP-Token": "mcp_your_token_here"}
-    )
-)
-
-# Connect to ServiceImmediately FastMCP server statelessly
-serviceimmediately_mcp = McpToolset(
-    connection_params=StreamableHTTPConnectionParams(
-        url="https://mock-saas.aishprabhat.demo.altostrat.com/service-immediately/mcp/",
-        headers={"X-MCP-Token": "mcp_your_token_here"}
-    )
-)
-```
+| Area | Decision | Rationale |
+| :--- | :--- | :--- |
+| **Knowledge Retrieval** | **Vertex AI Search** (Enterprise Datastore) | Replaces manual OKF chunking with managed dense vector + lexical hybrid semantic search, neural re-ranking, and layout-aware document ingestion. |
+| **Network Ingress** | **Direct to Agent Engine** (Removed Agent Gateway) | Eliminates extra proxy hop ($15\text{--}30\text{ms}$ latency savings) and leverages native IAM/OAuth2 endpoints on Vertex AI Agent Engine. |
+| **Security Tier** | **Model Armor Only** (Removed Cloud Armor) | Focuses security on GenAI prompt sanitization, jailbreak prevention, and SPII masking (<50ms latency), removing redundant network WAF costs. |
+| **MCP Connectivity** | **Native ADK `McpToolset`** | Connects statelessly over FastMCP Streamable HTTP with `X-MCP-Token` header, auto-discovering remote tool schemas with zero wrapper code. |
