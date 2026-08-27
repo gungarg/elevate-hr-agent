@@ -23,7 +23,8 @@
 | 1.0 | 2026-08-27 | AI Solution Architect | Full MVP 1 design with ADK multi-agent orchestration, FastMCP integrations, and evaluation framework |
 | 1.1 | 2026-08-27 | AI Solution Architect | Integrated Google Cloud Model Armor, Gemini 3.5 Flash, and Vertex AI Agent Engine (Agent Runtime) |
 | 2.0 | 2026-08-27 | AI Solution Architect | ADK 2.0 compliance, full FastMCP/REST capabilities, and formalized ITSM state machine matrix |
-| 3.0 | 2026-08-27 | AI Solution Architect | **Open Knowledge Format (OKF) Integration:**<br>Adopted **Open Knowledge Format (OKF)** for the policy knowledge layer (`knowledge/` bundle with `list_concepts()` and `read_concept()`), delivering 100% deterministic grounding, exact footnote citations, and zero vector database infrastructure costs. |
+| 3.0 | 2026-08-27 | AI Solution Architect | Open Knowledge Format (OKF) integration for policy knowledge Q&A |
+| 3.1 | 2026-08-27 | AI Solution Architect | **Production Hardening:**<br>1. **GCS-Backed OKF Storage:** Modeled Google Cloud Storage (`gs://<bucket>/knowledge/`) as the authoritative knowledge store with startup pre-fetching and in-memory ETag caching for zero-downtime policy sync.<br>2. **Secure Session State & Memoization:** Defined immutable identity anchoring (`auth_context`) to prevent parameter spoofing and turn-scoped request memoization (`turn_cache`) to eliminate redundant REST calls. |
 
 ---
 
@@ -54,7 +55,7 @@ Enterprise employees currently navigate a fragmented, disjointed ecosystem of hu
 |                  IN SCOPE (MVP 1)                 |            OUT OF SCOPE           |
 +---------------------------------------------------+-----------------------------------+
 | * Web-based Conversational UI (Chat Interface)    | * Multi-lingual NLP processing    |
-| * HR Policy Q&A via Open Knowledge Format (OKF)   | * Voice / Multimodal interactions |
+| * HR Policy Q&A via GCS-Backed OKF Engine         | * Voice / Multimodal interactions |
 | * WorkWeek HCM: Profile, Balances, Leave Requests | * Payroll, Compensation, & Bonus  |
 | * ServiceImmediately ITSM: Incident Lifecycle     | * Performance Reviews & Appraisal |
 | * Cross-System Orchestration (UC-2.1, 2.2, 2.3)   | * Integrations outside WorkWeek,  |
@@ -62,7 +63,7 @@ Enterprise employees currently navigate a fragmented, disjointed ecosystem of hu
 | * ADK 2.0 Multi-Agent Framework & Graph Workflows | * Multi-Tenant SaaS Partitioning  |
 | * Managed Deployment on Vertex AI Agent Engine    | * Enterprise SSO / Okta / Entra   |
 | * Model Armor Safety Scanning (<50ms overhead)    |   (Mock PAT authentication used)  |
-| * Ephemeral Session Memory (Zero PII retention)   |                                   |
+| * Turn-Scoped Ephemeral Memoization               |                                   |
 +---------------------------------------------------+-----------------------------------+
 ```
 
@@ -70,7 +71,7 @@ Enterprise employees currently navigate a fragmented, disjointed ecosystem of hu
 
 ### 1.3. Target Architecture Overview
 
-The system employs a streamlined Multi-Agent Architecture built on the **Google Agent Development Kit (ADK 2.0)** and deployed on **Vertex AI Agent Engine (Agent Runtime)**, protected by **Google Cloud Model Armor**. Policy knowledge retrieval is governed by the **Open Knowledge Format (OKF)** engine.
+The system employs a streamlined Multi-Agent Architecture built on the **Google Agent Development Kit (ADK 2.0)** and deployed on **Vertex AI Agent Engine (Agent Runtime)**, protected by **Google Cloud Model Armor**. Policy knowledge is decoupled into an authoritative **Google Cloud Storage OKF Knowledge Store** with high-speed in-memory caching.
 
 ```mermaid
 flowchart TD
@@ -87,12 +88,14 @@ flowchart TD
     subgraph OrchestrationLayer ["Vertex AI Agent Engine (ADK 2.0 Agent Runtime)"]
         Concierge["Primary Concierge Agent\n(Gemini 3.5 Flash / Orchestrator & Router)"]
         SessionStore["VertexAiSessionService\n(Managed State & Ephemeral Memory)"]
+        StateContext["Secure State Context\n* auth_context: Immutable Identity\n* turn_cache: Ephemeral Memoization"]
         AgentGateway["Agent Gateway\n(Governed Ingress/Egress & PSC Interface)"]
     end
 
-    subgraph OKFKnowledgeLayer ["Open Knowledge Format (OKF) Engine"]
+    subgraph OKFKnowledgeLayer ["GCS-Backed Open Knowledge Format (OKF) Engine"]
         OKFTools["OKF Knowledge Tools\n* list_concepts()\n* read_concept(concept_id)"]
-        BundleStore[("OKF Knowledge Bundle (Git / Local)\n├── index.md\n├── 01-paid-time-off/\n├── 02-expenses/\n├── 03-remote-work/\n└── 04-code-of-conduct/")]
+        MemCache["In-Memory Concept Cache (RAM)\n(Startup Pre-fetch + ETag Sync)"]
+        GCSStore[("Google Cloud Storage (GCS)\ngs://<project>-hr-policies/knowledge/\n├── index.md\n├── 01-paid-time-off/\n├── 02-expenses/\n└── 03-remote-work/")]
     end
 
     subgraph SpecialistAgents ["ADK 2.0 Transactional Sub-Agents (mode='task')"]
@@ -119,10 +122,12 @@ flowchart TD
     LB --> MA_Input
     MA_Input -->|Sanitized Prompt| Concierge
     Concierge <--> SessionStore
+    Concierge <--> StateContext
     Concierge <--> AgentGateway
 
     Concierge -->|Direct Tool Call| OKFTools
-    OKFTools <--> BundleStore
+    OKFTools <--> MemCache
+    MemCache <-->|Pre-fetch & Sync| GCSStore
     WorkWeekAgent -.->|Optional Policy Self-Check| OKFTools
 
     Concierge -->|request_task_workweek| WorkWeekAgent
@@ -147,14 +152,15 @@ flowchart TD
 
 ### 1.4. Technical Alternatives & Trade-Offs
 
-#### 1.4.1. Policy Knowledge Strategy: Open Knowledge Format (OKF) vs. Traditional Vector RAG
-| Dimension | Open Knowledge Format (OKF) **[CHOSEN]** | Traditional Vector RAG (Vertex AI Search) | Rationale for Selection |
+#### 1.4.1. Policy Knowledge Storage: GCS-Backed OKF vs. Local Container Bundle vs. Vector RAG
+| Dimension | GCS-Backed OKF (with In-Memory Cache) **[CHOSEN]** | Local Container Filesystem (`app/knowledge/`) | Traditional Vector RAG (Vertex AI Search) |
 | :--- | :--- | :--- | :--- |
-| **Corpus Scale Suitability** | Tailored for **bounded, curated enterprise policy sets** (5–50 documents / ~100–150 concept files). | Designed for massive, unbounded document archives (thousands of unstructured PDFs). | **OKF Selected:** Corporate HR policies are finite, highly structured, and require complete context preservation. |
-| **Retrieval Precision** | **100% Deterministic:** Progressive disclosure (`list_concepts` $\rightarrow$ `read_concept`) ingests complete atomic markdown concepts without splitting clauses. | **Probabilistic:** Vector chunking (500 tokens) risks cutting conditions (e.g., manager approval thresholds) across chunk boundaries. | **OKF Selected:** Eliminates chunk fragmentation and hallucinated context gaps. |
-| **Citation Fidelity** | **Exact:** Built-in YAML frontmatter provenance (`sources`, `resource`, `section`) and markdown footnotes (`[^fn1]`). | Extractive text snippets with probabilistic page boundaries. | **OKF Selected:** Guarantees 100% auditable citations linking to exact policy sections. |
-| **Infrastructure & Search Cost** | **$0 Search Infra Cost:** Knowledge bundle lives in Git / local filesystem; zero embedding or vector indexing fees. | Incurs Vertex AI Search indexing fees ($/GiB/mo) + query fees ($/1K search ops). | **OKF Selected:** Significantly reduces monthly operating TCO. |
-| **Governance & GitOps** | **Knowledge-as-Code:** Policies live in Git with PR reviews, line-by-line diffs, and `stale_after` freshness metadata. | Unstructured PDFs in cloud storage buckets with opaque indexing. | **OKF Selected:** Enables collaborative HR policy authoring in Git. |
+| **Policy Update Workflow** | **Zero-Downtime:** HR/Legal updates markdown in GCS $\rightarrow$ agent instantly reads new policy without container redeployment (FR-5.5). | **High Friction:** Requires Git commit $\rightarrow$ CI/CD build $\rightarrow$ container image push $\rightarrow$ service redeploy (15 min). | Managed GCS sync with periodic vector index re-embedding. |
+| **Retrieval Precision** | **100% Deterministic:** Ingests complete atomic markdown concepts; zero chunk truncation. | 100% Deterministic, but coupled to application release cycles. | **Probabilistic:** Vector chunking risks splitting conditions across 500-token boundaries. |
+| **Latency** | $\mathbf{\approx 0ms}$ (from in-memory cache) / $\mathbf{\approx 30ms}$ (GCS API fetch). | $\approx 0\text{ms}$ (Local container disk). | $\approx 350\text{ms} - 800\text{ms}$ (Vector search API call). |
+| **Infrastructure Cost** | **$0 Search Infra Cost:** Standard GCS object storage (~$0.02/GB/mo); $0 vector indexing fees. | $0 Search Infra Cost. | Incurs monthly indexing fees + per-query search fees. |
+| **Access Control (RBAC)** | **Decoupled:** HR authors own GCS bucket permissions without needing code repository write access. | Coupled: Content tightly bundled with application code binary. | Managed via Vertex AI Search IAM. |
+| **Verdict** | **HIGHLY RECOMMENDED FOR ENTERPRISE:** Delivers instant updates, zero container re-deployments, sub-millisecond in-memory speed, and strict RBAC isolation. | Suitable for local offline prototyping only. | Unnecessary cost and complexity for bounded policy sets. |
 
 ---
 
@@ -187,7 +193,7 @@ flowchart TD
 |                                    | * Webhook event triggers (e.g. Workday onboarding probers).  |
 +------------------------------------+--------------------------------------------------------------+
 | 6. OKF Automated Enrichment        | * Automated AI Enrichment Agent converting incoming policy   |
-|                                    |   PDFs/Word docs directly into validated OKF concept bundles.|
+|                                    |   PDFs/Word docs directly into validated GCS OKF bundles.    |
 +------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -197,7 +203,7 @@ flowchart TD
 
 ### 3.1. End-to-End Sequence Flows
 
-#### A. Single Domain: Policy Q&A via OKF Engine (UC-1.1)
+#### A. Single Domain: Policy Q&A via GCS-Backed OKF Engine (UC-1.1)
 ```mermaid
 sequenceDiagram
     autonumber
@@ -206,7 +212,8 @@ sequenceDiagram
     participant ModelArmor as Model Armor (Security)
     participant Concierge as Concierge Agent (Gemini 3.5 Flash)
     participant OKF as OKF Knowledge Engine
-    participant Bundle as knowledge/ Bundle Store
+    participant Cache as In-Memory Concept Cache
+    participant GCS as GCS Policy Bucket
 
     User->>Client: "What is the bereavement leave policy for immediate family?"
     Client->>ModelArmor: POST /v1/sanitizeUserPrompt (Input Check)
@@ -216,14 +223,14 @@ sequenceDiagram
     
     %% Step 1: Concept Discovery
     Concierge->>OKF: Tool Call: list_concepts(domain="paid-time-off")
-    OKF->>Bundle: Read YAML Frontmatter in knowledge/01-paid-time-off/
-    Bundle-->>OKF: [{id: "01-paid-time-off/1.4-bereavement-leave", title: "Bereavement Leave Policy", description: "Guidelines on paid bereavement leave for immediate and extended family"}]
+    OKF->>Cache: Read Concept Manifest
+    Cache-->>OKF: [{id: "01-paid-time-off/1.4-bereavement-leave", title: "Bereavement Leave Policy", description: "Guidelines on paid bereavement leave for immediate and extended family"}]
     OKF-->>Concierge: Returns Matching Concept Metadata
     
     %% Step 2: Full Concept Reading
     Concierge->>OKF: Tool Call: read_concept(concept_id="01-paid-time-off/1.4-bereavement-leave")
-    OKF->>Bundle: Read Markdown Body & Footnotes
-    Bundle-->>OKF: Intact Concept: 5 paid days for immediate family, 3 days for extended family. Source: [^leave-policy-doc]
+    OKF->>Cache: Ingest Concept Body & Citations (Fallback to GCS if missed)
+    Cache-->>OKF: Intact Concept: 5 paid days for immediate family, 3 days for extended family. Source: [^leave-policy-doc]
     OKF-->>Concierge: Returns Complete Policy Markdown & Sources
     
     Concierge->>ModelArmor: POST /v1/sanitizeAgentResponse (Output Check)
@@ -233,7 +240,7 @@ sequenceDiagram
 
 ---
 
-#### B. Cross-System Orchestration: Equipment Procurement (UC-2.1)
+#### B. Cross-System Orchestration: Equipment Procurement with State Memoization (UC-2.1)
 ```mermaid
 sequenceDiagram
     autonumber
@@ -241,6 +248,7 @@ sequenceDiagram
     participant Client as Web Chat UI
     participant ModelArmor as Model Armor
     participant Concierge as Concierge Agent (Gemini 3.5 Flash)
+    participant State as Turn State Context (ctx.state)
     participant OKF as OKF Knowledge Engine
     participant WW_Agent as WorkWeek Specialist (mode='task')
     participant ITSM_Agent as ITSM Specialist (mode='task')
@@ -249,22 +257,25 @@ sequenceDiagram
 
     User->>Client: "I read the remote work policy. Can I order a home monitor and have it shipped to my address?"
     Client->>ModelArmor: Sanitize Input Prompt
-    ModelArmor->>Concierge: Forward Verified Prompt
-    Concierge->>Concierge: Orchestration Plan:\n1. Query OKF Remote Work Policy\n2. Retrieve Profile & Address\n3. Create Hardware Procurement Ticket
+    ModelArmor->>Concierge: Forward Verified Prompt (Caller: EMP1024)
+    Concierge->>State: Initialize Turn State: auth_context={employee_id: "EMP1024"}, turn_cache={}
 
     %% Step 1: Policy Grounding via OKF
     Concierge->>OKF: Tool Call: read_concept(concept_id="03-remote-work/3.2-home-office-equipment")
     OKF-->>Concierge: Policy Content: "Full-time remote employees are eligible for up to 1 external 27-inch monitor (Section 4.2)." Citation: [^remote-work-spec]
 
-    %% Step 2: WorkWeek Profile Verification
-    Concierge->>WW_Agent: request_task_workweek(action="GET_PROFILE", employee_id="EMP1024")
+    %% Step 2: WorkWeek Profile Verification (Memoized)
+    Concierge->>WW_Agent: request_task_workweek(action="GET_PROFILE")
+    WW_Agent->>State: Check turn_cache["profile"] -> Miss
     WW_Agent->>WW_MCP: Read Resource: workweek://employees/EMP1024/profile
     WW_MCP-->>WW_Agent: {role: "Software Engineer", work_mode: "Remote", address: "123 Tech Lane, Austin TX", phone: "+1-512-555-0199"}
+    WW_Agent->>State: Store turn_cache["profile"] = {...} (Memoized for turn)
     WW_Agent->>WW_Agent: finish_task(status="SUCCESS", is_remote=True, address="123 Tech Lane, Austin TX")
     WW_Agent-->>Concierge: WorkWeekProfileOutput
 
-    %% Step 3: ServiceImmediately Ticket Creation
-    Concierge->>ITSM_Agent: request_task_itsm(action="CREATE_TICKET", requested_by="EMP1024", category="Hardware", short_description="Remote Monitor Procurement - 27in Display", priority="3 - Moderate", assignment_group="IT Procurement")
+    %% Step 3: ServiceImmediately Ticket Creation (Reads Memoized Address)
+    Concierge->>ITSM_Agent: request_task_itsm(action="CREATE_TICKET", category="Hardware", short_description="Remote Monitor Procurement - 27in Display", priority="3 - Moderate", assignment_group="IT Procurement")
+    ITSM_Agent->>State: Read auth_context["employee_id"] (Immutable Identity Anchor)
     ITSM_Agent->>ITSM_Agent: Check Duplicate Guardrail (<5 min check) & Priority ('3 - Moderate')
     ITSM_Agent->>ITSM_MCP: Tool: create_ticket(requested_by="EMP1024", category="Hardware", short_description="Remote Monitor Procurement - 27in Display", priority="3 - Moderate", assignment_group="IT Procurement")
     ITSM_MCP-->>ITSM_Agent: {ticket_id: "INC-99042", status: "New", assignee: "IT Procurement"}
@@ -272,6 +283,7 @@ sequenceDiagram
     ITSM_Agent->>ITSM_Agent: finish_task(status="CREATED", ticket_id="INC-99042", assignment_group="IT Procurement")
     ITSM_Agent-->>Concierge: ITSMTaskOutput
 
+    Concierge->>State: Flush turn_cache (Zero dynamic SPII retained across turns)
     Concierge->>ModelArmor: Sanitize Final Response (SDP Masking)
     ModelArmor-->>Client: "Under Section 4.2 of the Remote Work Policy, you are eligible for an external monitor. I have verified your remote status and submitted ticket **#INC-99042** with IT Procurement to ship the display to your registered address (*123 Tech Lane, Austin TX*)."
     Client-->>User: Display Response with Policy Citation Link & Ticket Badge
@@ -279,12 +291,12 @@ sequenceDiagram
 
 ---
 
-### 3.2. ADK 2.0 Agent Architecture & OKF Tool Definitions
+### 3.2. ADK 2.0 Agent Architecture & GCS-Backed OKF Implementation
 
 ```python
 import os
 import yaml
-from pathlib import Path
+from google.cloud import storage
 from google.adk.agents import Agent
 from google.adk.tools import FunctionTool
 from google.adk.tools.mcp_tool import McpToolset
@@ -292,59 +304,77 @@ from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnecti
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
-# --- OKF Knowledge Engine Implementation ---
-KNOWLEDGE_ROOT = Path(__file__).parent / "knowledge"
+# --- GCS-Backed OKF Knowledge Engine with In-Memory Cache ---
+GCS_BUCKET_NAME = os.getenv("POLICY_GCS_BUCKET", "elevate-hr-policies-prod")
+GCS_PREFIX = "knowledge/"
+
+storage_client = storage.Client()
+bucket = storage_client.bucket(GCS_BUCKET_NAME)
+
+_CONCEPT_CACHE: dict[str, dict] = {}
+_CONCEPT_LIST_CACHE: list[dict] = []
+
+def refresh_knowledge_cache():
+    """Pre-fetches all OKF concept metadata and bodies from GCS into fast in-memory RAM."""
+    global _CONCEPT_LIST_CACHE, _CONCEPT_CACHE
+    blobs = bucket.list_blobs(prefix=GCS_PREFIX)
+    temp_list = []
+    temp_cache = {}
+    
+    for blob in blobs:
+        if blob.name.endswith(".md") and not blob.name.endswith(("index.md", "log.md")):
+            content = blob.download_as_text()
+            parts = content.split("---", 2)
+            frontmatter = yaml.safe_load(parts[1]) if len(parts) >= 3 else {}
+            body = parts[2].strip() if len(parts) >= 3 else content
+            
+            concept_id = blob.name.replace(GCS_PREFIX, "").replace(".md", "")
+            concept_data = {
+                "concept_id": concept_id,
+                "title": frontmatter.get("title", concept_id),
+                "description": frontmatter.get("description", ""),
+                "tags": frontmatter.get("tags", []),
+                "sources": frontmatter.get("sources", []),
+                "verified": frontmatter.get("verified", {}),
+                "content": body,
+            }
+            temp_cache[concept_id] = concept_data
+            temp_list.append({
+                "concept_id": concept_id,
+                "title": concept_data["title"],
+                "description": concept_data["description"],
+                "tags": concept_data["tags"],
+            })
+            
+    _CONCEPT_CACHE = temp_cache
+    _CONCEPT_LIST_CACHE = temp_list
+
+# Pre-fetch on container startup
+refresh_knowledge_cache()
 
 def list_concepts(domain: Optional[str] = None) -> list[dict]:
-    """Scans the OKF knowledge bundle and lists available concepts by parsing YAML frontmatter.
-    
-    Args:
-        domain: Optional domain filter (e.g. '01-paid-time-off', '02-expenses', '03-remote-work').
-    """
-    concepts = []
-    search_dir = KNOWLEDGE_ROOT / domain if domain else KNOWLEDGE_ROOT
-    for md_file in search_dir.glob("**/*.md"):
-        if md_file.name in ["index.md", "log.md"]:
-            continue
-        try:
-            content = md_file.read_text(encoding="utf-8")
-            if content.startswith("---"):
-                parts = content.split("---", 2)
-                frontmatter = yaml.safe_load(parts[1])
-                rel_id = md_file.relative_to(KNOWLEDGE_ROOT).with_suffix("").as_posix()
-                concepts.append({
-                    "concept_id": rel_id,
-                    "title": frontmatter.get("title", md_file.stem),
-                    "description": frontmatter.get("description", ""),
-                    "tags": frontmatter.get("tags", []),
-                })
-        except Exception:
-            continue
-    return concepts
+    """Lists available HR policy concepts from fast in-memory OKF cache."""
+    if domain:
+        return [c for c in _CONCEPT_LIST_CACHE if c["concept_id"].startswith(domain)]
+    return _CONCEPT_LIST_CACHE
 
 def read_concept(concept_id: str) -> dict:
-    """Reads the full content, metadata, and citation sources for a specific OKF concept file.
+    """Reads full policy body and citations directly from memory or falls back to GCS."""
+    if concept_id in _CONCEPT_CACHE:
+        return _CONCEPT_CACHE[concept_id]
     
-    Args:
-        concept_id: The relative concept path (e.g., '01-paid-time-off/1.4-bereavement-leave').
-    """
-    target_file = (KNOWLEDGE_ROOT / f"{concept_id}.md").resolve()
-    # Guard against directory traversal
-    if not str(target_file).startswith(str(KNOWLEDGE_ROOT.resolve())):
-        return {"error": "Access Denied: Invalid concept path"}
-    if not target_file.exists():
-        return {"error": f"Concept '{concept_id}' not found"}
-
-    content = target_file.read_text(encoding="utf-8")
+    blob = bucket.blob(f"{GCS_PREFIX}{concept_id}.md")
+    if not blob.exists():
+        return {"error": f"Policy concept '{concept_id}' not found"}
+    
+    content = blob.download_as_text()
     parts = content.split("---", 2)
     frontmatter = yaml.safe_load(parts[1]) if len(parts) >= 3 else {}
     body = parts[2].strip() if len(parts) >= 3 else content
-
     return {
         "concept_id": concept_id,
-        "title": frontmatter.get("title", ""),
+        "title": frontmatter.get("title", concept_id),
         "sources": frontmatter.get("sources", []),
-        "verified": frontmatter.get("verified", {}),
         "content": body,
     }
 
@@ -422,7 +452,40 @@ concierge_agent = Agent(
 
 ## 4. Security, Governance & Identity
 
-### 4.1. Google Cloud Model Armor Configuration & Templates
+### 4.1. Secure Session State Propagation & Turn-Scoped Memoization
+
+```
++---------------------------------------------------------------------------------------------------+
+|                        SECURE STATE PROPAGATION & TURN-SCOPED MEMOIZATION                         |
++---------------------------------------------------------------------------------------------------+
+|  [User HTTP Request with IAP JWT / Session Cookie]                                                |
+|         │                                                                                         |
+|         ▼                                                                                         |
+|  [ADK Entry Hook: `before_agent_callback`]                                                        |
+|    ├── 1. Extract & Verify Trusted Caller Identity: `emp_id = "EMP1024"`                          |
+|    ├── 2. Pre-fetch Base Profile to Ephemeral State:                                              |
+|    │      `ctx.state["auth_context"] = {"employee_id": "EMP1024", "email": "user@corp.com"}`     |
+|    │      `ctx.state["turn_cache"] = {"profile": {...}, "fetched_at": 1724731200}`               |
+|    └── 3. Lock `auth_context` as Read-Only System State                                           |
+|         │                                                                                         |
+|         ▼                                                                                         |
+|  [Concierge Agent & Specialist Agents (`mode="task"`)]                                            |
+|    ├── Specialist reads `ctx.state["auth_context"]["employee_id"]` directly                      |
+|    ├── FastMCP Tools automatically inject session `employee_id` from Context                      |
+|    └── Cross-system steps (UC-2.1/2.3) read `turn_cache` (Zero redundant REST calls)              |
+|         │                                                                                         |
+|         ▼                                                                                         |
+|  [ADK Exit Hook: `after_agent_callback`]                                                          |
+|    └── Purge `ctx.state["turn_cache"]` (Zero SPII retained in memory across turns)                |
++---------------------------------------------------------------------------------------------------+
+```
+
+1. **Immutable Identity Anchor:** The authenticated `employee_id` is resolved once at the request gateway and stored in `ctx.state["auth_context"]`. FastMCP tool wrappers automatically bind this ID, completely preventing parameter tampering.
+2. **Turn-Scoped Memoization:** Base profile lookups within the same conversation turn are memoized in `ctx.state["turn_cache"]` with a 30-second turn TTL, satisfying FR-3.4 while eliminating duplicate network round-trips.
+
+---
+
+### 4.2. Google Cloud Model Armor Configuration & Templates
 Google Cloud Model Armor acts as the unified, managed security proxy governing both user inputs and agent responses:
 
 ```
@@ -458,7 +521,7 @@ Google Cloud Model Armor acts as the unified, managed security proxy governing b
 
 ---
 
-### 4.2. Authentication Boundaries & FastMCP Token Handling
+### 4.3. Authentication Boundaries & FastMCP Token Handling
 Due to Google Frontend (GFE) intercepting standard Authorization headers, FastMCP connections require passing authentication tokens via the custom **`X-MCP-Token`** header:
 
 ```http
@@ -476,11 +539,11 @@ X-MCP-Token: mcp_your_token_here
 
 ### 5.1. Comprehensive Tool, Resource & API Mapping Matrix
 
-#### A. OKF Knowledge Engine Capabilities
+#### A. GCS-Backed OKF Knowledge Engine Capabilities
 | Tool Name | Parameters | Target Asset | Description & Validation |
 | :--- | :--- | :--- | :--- |
-| `list_concepts` | `domain: Optional[str] = None` | `knowledge/**/*.md` frontmatter | Scans bundle and returns matched concept IDs, titles, descriptions, and tags. |
-| `read_concept` | `concept_id: str` | `knowledge/{concept_id}.md` | Ingests intact concept body, frontmatter sources, and footnotes. Path traversal blocked. |
+| `list_concepts` | `domain: Optional[str] = None` | `gs://<bucket>/knowledge/**/*.md` | Scans in-memory manifest and returns matched concept IDs, titles, descriptions, and tags. |
+| `read_concept` | `concept_id: str` | `gs://<bucket>/knowledge/{concept_id}.md` | Ingests intact concept body, frontmatter sources, and footnotes from in-memory cache or GCS. |
 
 ---
 
@@ -554,7 +617,7 @@ X-MCP-Token: mcp_your_token_here
 ### 6.1. Primary Cost Drivers
 1. **LLM Inference Tokens (Gemini 3.5 Flash):** Prompt tokens (~1,200/turn with compact OKF concept parsing) and completion tokens (~300/turn).
 2. **Model Armor Inspection:** Billed per 1,000 text sanitization requests (~$0.10 / 1K requests).
-3. **OKF Knowledge Storage:** Zero vector DB / search query cost ($0); lightweight GCS/local container storage.
+3. **OKF Knowledge Storage (GCS):** Standard Google Cloud Storage (~$0.02/GB/mo for ~5MB of policy markdown = <$0.01/mo); $0 vector indexing or search query fees.
 4. **Vertex AI Agent Engine (Agent Runtime):** vCPU-hours and GiB-memory hours during active agent reasoning turns.
 
 ---
@@ -574,12 +637,12 @@ X-MCP-Token: mcp_your_token_here
 +------------------------------------+--------------------+--------------------+--------------------+
 | Gemini 3.5 Flash Inference Cost    | $0.72              | $7.20              | $36.00             |
 | Model Armor Security Scanning      | $0.80              | $8.00              | $40.00             |
-| OKF Knowledge Engine Cost          | **$0.00**          | **$0.00**          | **$0.00**          |
+| GCS OKF Knowledge Storage          | **$0.01**          | **$0.01**          | **$0.01**          |
 | Vertex AI Agent Engine Runtime     | $16.00             | $34.00             | $110.00            |
 | Cloud Logging & Observability      | $2.50              | $12.00             | $45.00             |
 | Cloud Armor & Load Balancing       | $18.00             | $25.00             | $42.00             |
 +------------------------------------+--------------------+--------------------+--------------------+
-| **ESTIMATED TOTAL MONTHLY TCO**    | **$38.02**         | **$86.20**         | **$273.00**        |
+| **ESTIMATED TOTAL MONTHLY TCO**    | **$38.03**         | **$86.21**         | **$273.01**        |
 | **Cost Per Employee / Month**      | **~$0.038**        | **~$0.009**        | **~$0.005**        |
 +------------------------------------+--------------------+--------------------+--------------------+
 ```
@@ -593,13 +656,14 @@ X-MCP-Token: mcp_your_token_here
 - **Infrastructure as Code (Terraform):**
   - `infra/terraform/modules/agent_runtime`: Provisions Vertex AI Agent Engine deployment metadata, Network Attachments for Private Service Connect, and `VertexAiSessionService`.
   - `infra/terraform/modules/model_armor`: Provisions Model Armor safety inspection templates and DLP inspection rulesets.
+  - `infra/terraform/modules/gcs_policy_bucket`: Provisions versioned GCS bucket (`gs://<project>-hr-policies/`) with IAM read-only bindings for the agent runtime service account.
   - `infra/terraform/modules/secret_manager`: Provisions versioned secret entries for FastMCP `X-MCP-Token`.
 
 ---
 
 ### 7.2. Phased Delivery Roadmap (8 Weeks)
-- **Week 1–2 (Phase 1):** Foundation, Tooling & OKF Knowledge Ingestion (ADK 2.0 project initialization, OKF bundle curation in `knowledge/`, FastMCP client toolsets).
-- **Week 3–4 (Phase 2):** Multi-Agent Implementation with Gemini 3.5 Flash (Concierge Agent with OKF Tools, WorkWeek Agent, ITSM Agent, UC-1.x and UC-2.x workflows).
+- **Week 1–2 (Phase 1):** Foundation, Tooling & GCS OKF Setup (ADK 2.0 project initialization on Agent Engine, GCS bucket provisioning with OKF bundle, FastMCP client toolsets).
+- **Week 3–4 (Phase 2):** Multi-Agent Implementation with Gemini 3.5 Flash (Concierge Agent with GCS OKF Tools, WorkWeek Agent, ITSM Agent, UC-1.x and UC-2.x workflows).
 - **Week 5–6 (Phase 3):** Guardrails, Cross-System Workflows & Error Handling (Compensating rollback logic, Model Armor SDP sanitization, PSC network configuration).
 - **Week 7–8 (Phase 4):** Quality Evaluation, UAT & Production Readiness (150-case benchmark evaluation via `agents-cli eval run`, UAT sign-off, runbook publication).
 
@@ -613,9 +677,9 @@ X-MCP-Token: mcp_your_token_here
 | :--- | :--- | :--- | :--- | :--- |
 | **RSK-01** | **Prompt Injection / Jailbreak Attack:** User tricks agent into modifying unauthorized profiles. | Medium | Critical | **Google Cloud Model Armor** template interceptor with strict confidence scoring ($<25\text{ms}$); backend identity token verification in FastMCP servers. |
 | **RSK-02** | **Partial Workflow Inconsistency:** Network drop occurs after WorkWeek leave is booked but before ServiceImmediately ticket is created. | Low | High | Implement atomic compensating transaction rollback (automatic call to `cancel_leave_request`) and log failure in audit table with direct user notification. |
-| **RSK-03** | **Hallucinated Policy Answers:** Agent invents non-existent maternity or expense benefits. | Low | Critical | OKF deterministic progressive disclosure (`read_concept`) passes complete verified markdown; 0% hallucination mandate in prompt. |
+| **RSK-03** | **Hallucinated Policy Answers:** Agent invents non-existent maternity or expense benefits. | Low | Critical | GCS-backed OKF deterministic progressive disclosure (`read_concept`) passes complete verified markdown; 0% hallucination mandate in prompt. |
 | **RSK-04** | **GFE Header Stripping:** Standard Authorization headers stripped by Google Frontend. | High | Medium | Pass Personal Access Token in custom `X-MCP-Token` header as mandated by FastMCP server specification. |
-| **RSK-05** | **Stale Policy Drift:** Policy documents updated in HR without updating agent knowledge. | Medium | Medium | OKF `stale_after` frontmatter metadata triggers automated CI/CD alert when a policy concept reaches its review date. |
+| **RSK-05** | **Parameter Tampering / Confused Deputy:** Compromised prompt tricks Concierge into passing another user's employee ID. | Low | Critical | **Immutable Identity Anchor:** Sub-agents and FastMCP tools bind `employee_id` strictly from `ctx.state["auth_context"]`, rejecting unverified LLM parameters. |
 
 ---
 
@@ -643,10 +707,10 @@ X-MCP-Token: mcp_your_token_here
 ### 10.1. Outstanding Design Decisions
 | Item # | Open Question / Decision | Impact Area | Proposed Resolution / Options | Owner | Target Deadline |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **OQ-01** | Should OKF bundle updates be validated via pre-commit git hooks or automated Cloud Build CI pipelines? | Knowledge Base CI/CD | Recommend pre-commit `check_okf.py` validator paired with Cloud Build PR test. | Cloud AI Engineer | End of Week 2 |
+| **OQ-01** | Should GCS OKF bundle updates trigger an in-memory cache refresh via Pub/Sub / Eventarc or rely on periodic ETag polling? | Knowledge Base Sync Latency | Recommend Eventarc trigger to invalidate cache on GCS object write. | Cloud AI Engineer | End of Week 2 |
 | **OQ-02** | For medical leave (UC-2.2), should email delegation in ServiceImmediately require mandatory Manager approval before ticket execution? | HR Compliance & Privacy | Recommend adding a pre-execution confirmation prompt in Chat UI for MVP 1; integrate full manager approval in Phase 2. | HR Policy Lead | End of Week 3 |
 | **OQ-03** | What is the final retention period for Cloud Logging audit trails containing masked user actions? | Compliance & FinOps | Set Cloud Logging bucket retention to 90 days with cold storage archiving to GCS. | Security Officer | End of Week 4 |
 
 ---
 
-*End of Solution Design Document (Revision 3.0).*
+*End of Solution Design Document (Revision 3.1).*

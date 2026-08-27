@@ -1,7 +1,7 @@
-# System Architecture: Enterprise HR Multi-Agent System (ADK 2.0 - OKF Edition)
+# System Architecture: Enterprise HR Multi-Agent System (ADK 2.0 - v3.1)
 
 ## Overview
-The Enterprise HR Multi-Agent System provides seamless, AI-orchestrated access to HR policy documents, WorkWeek HCM self-service operations, and ServiceImmediately IT service desk management using **ADK 2.0**, **Vertex AI Agent Engine**, **Google Cloud Model Armor**, and the **Open Knowledge Format (OKF)** knowledge engine.
+The Enterprise HR Multi-Agent System provides seamless, AI-orchestrated access to HR policy documents, WorkWeek HCM self-service operations, and ServiceImmediately IT service desk management using **ADK 2.0**, **Vertex AI Agent Engine**, **Google Cloud Model Armor**, and a **GCS-Backed Open Knowledge Format (OKF)** knowledge engine.
 
 ---
 
@@ -13,16 +13,23 @@ graph TD
     Ingress --> ModelArmor[Google Cloud Model Armor - Prompt Sanitization]
     ModelArmor --> RootAgent[Concierge Agent - ADK 2.0 Orchestrator]
 
-    subgraph OKFKnowledgeLayer [Open Knowledge Format - OKF Knowledge Engine]
-        RootAgent -->|list_concepts / read_concept| OKFBundle[("knowledge/ Bundle Store\n* 01-paid-time-off/\n* 02-expenses/\n* 03-remote-work/\n* 04-code-of-conduct/")]
-    end
-
-    subgraph VertexAIAgentEngine [Vertex AI Agent Engine / Agent Runtime Execution Context]
-        RootAgent -->|request_task_workweek| WorkWeekAgent[WorkWeek Specialist - mode='task']
-        RootAgent -->|request_task_itsm| ITSMAgent[ITSM Specialist - mode='task']
-        WorkWeekAgent -.->|Optional Policy Self-Check| OKFBundle
+    subgraph StateManagement [Secure State Management & Memoization]
+        RootAgent <--> StateStore[Context State: ctx.state\n* auth_context: Immutable Identity\n* turn_cache: Ephemeral Memoization]
         RootAgent <--> SessionStore[VertexAiSessionService]
         RootAgent <--> AgentGW[Agent Gateway & PSC Interface]
+    end
+
+    subgraph OKFKnowledgeLayer [GCS-Backed Open Knowledge Format - OKF Engine]
+        RootAgent -->|list_concepts / read_concept| MemCache[In-Memory Concept Cache - RAM]
+        MemCache <-->|Pre-fetch & Sync| GCSBundle[("Google Cloud Storage (GCS)\ngs://<project>-hr-policies/knowledge/\n* 01-paid-time-off/\n* 02-expenses/\n* 03-remote-work/\n* 04-code-of-conduct/")]
+    end
+
+    subgraph VertexAIAgentEngine [Vertex AI Agent Engine Execution Context]
+        RootAgent -->|request_task_workweek| WorkWeekAgent[WorkWeek Specialist - mode='task']
+        RootAgent -->|request_task_itsm| ITSMAgent[ITSM Specialist - mode='task']
+        WorkWeekAgent -.->|Optional Policy Self-Check| MemCache
+        WorkWeekAgent <--> StateStore
+        ITSMAgent <--> StateStore
     end
 
     subgraph FastMCP Integration Subsystem [Streamable HTTP Transport]
@@ -51,12 +58,14 @@ graph TD
 - **Framework:** `google.adk.agents.Agent` (ADK 2.0)
 - **Model:** `gemini-3.5-flash`
 - **Hosting:** Vertex AI Agent Engine (Agent Runtime)
-- **Direct Tools:** `list_concepts()` and `read_concept(concept_id)` operating over the local/GCS `knowledge/` bundle.
+- **State Anchoring:** Extracts authenticated identity on turn entry and locks into `ctx.state["auth_context"]`.
+- **Direct Tools:** `list_concepts()` and `read_concept(concept_id)` operating over the in-memory GCS OKF cache.
 - **Functionality:** Answers HR policy questions deterministically in a single turn with exact footnote citations, delegates transactional tasks to specialized domain agents via typed `request_task_{name}` tools, manages multi-turn context with `VertexAiSessionService`, and compiles user-facing answers with clear confirmation cards.
 
 ### B. WorkWeek Specialist Agent (`mode="task"`)
 - **Model:** `gemini-3.5-flash`
 - **Output Schema:** `WorkWeekTaskOutput` (Pydantic model)
+- **State Integration:** Leverages `ctx.state["turn_cache"]` for base profile memoization within a single turn, eliminating duplicate REST round-trips in multi-step workflows (e.g. UC-2.1/2.3).
 - **FastMCP Tools (7/7):** `get_current_employee_id`, `get_personal_info`, `update_personal_info`, `get_employee_balances`, `request_time_off`, `get_leave_requests`, `cancel_leave_request`.
 - **FastMCP Resources (2/2):** `workweek://employees/{id}/profile`, `workweek://employees/{id}/timeoff`.
 - **REST APIs:** `PUT .../requests/{id}` (modify leave), `GET .../feedback` (feedback history).
@@ -65,6 +74,7 @@ graph TD
 ### C. ITSM Specialist Agent (`mode="task"`)
 - **Model:** `gemini-3.5-flash`
 - **Output Schema:** `ITSMTaskOutput` (Pydantic model)
+- **Identity Binding:** Binds `requested_by` strictly from `ctx.state["auth_context"]["employee_id"]` to prevent parameter tampering.
 - **FastMCP Tools (4/4):** `list_tickets`, `create_ticket`, `add_ticket_comment`, `update_ticket_status`.
 - **FastMCP Resources (1/1):** `serviceimmediately://tickets/{id}`.
 - **State Machine Guardrails:**
