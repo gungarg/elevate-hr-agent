@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Interactive Local Web Server for Altostrat HR Multi-Agent Assistant
-Enhanced with 3-Panel Layout: Profile & Balances, Clean Chat Stream, and Live Execution Logs Inspector.
+Optimized for Remote Desktop displays: Balanced 3-panel responsive layout fitting 1024px+ viewports.
 """
 
 import sys
@@ -35,14 +35,14 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
         "time": get_timestamp(),
         "level": "INFO",
         "stage": "INGRESS",
-        "message": f"Received user turn from session caller '{employee_id}': \"{query}\""
+        "message": f"Received turn from caller '{employee_id}': \"{query}\""
     })
     
     logs.append({
         "time": get_timestamp(),
         "level": "SECURITY",
         "stage": "MODEL_ARMOR",
-        "message": "Model Armor Prompt Sanitization: Input passed (Confidence: 0.99, No Injection, In-Domain)"
+        "message": "Prompt Sanitization: Pass (Confidence: 0.99, No Injection)"
     })
 
     response_text = ""
@@ -69,7 +69,7 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
             "time": get_timestamp(),
             "level": "TOOL_CALL",
             "stage": "OKF_ENGINE",
-            "message": f"Calling okf_tool.read_concept('{concept_id}')... Ingesting intact concept markdown"
+            "message": f"Calling okf_tool.read_concept('{concept_id}')... Ingesting concept body"
         })
         concept_data = read_concept(concept_id)
         
@@ -104,7 +104,7 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
             "time": get_timestamp(),
             "level": "REASONING",
             "stage": "CONCIERGE_ROUTER",
-            "message": "Classified intent: HCM Transaction -> Delegate to workweek_specialist (mode='task')"
+            "message": "Classified intent: HCM Transaction -> Delegate to workweek_specialist"
         })
         logs.append({
             "time": get_timestamp(),
@@ -137,7 +137,7 @@ def process_agent_turn(query: str, employee_id: str = "EMP1024") -> dict:
             "time": get_timestamp(),
             "level": "REASONING",
             "stage": "WORKWEEK_AGENT",
-            "message": f"Evaluating booking: {days} days of {leave_type} (2026-09-01 to 2026-09-05). Checking remaining balance..."
+            "message": f"Evaluating booking: {days} days of {leave_type} (2026-09-01 to 2026-09-05). Checking balance..."
         })
         
         result = ww_client.request_time_off(employee_id, "2026-09-01", "2026-09-05", leave_type, days)
@@ -350,7 +350,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Altostrat HR Multi-Agent Assistant</title>
-    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Roboto:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary: #1a73e8;
@@ -372,101 +372,117 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             --log-text: #d4d4d4;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
+        html, body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
             font-family: 'Google Sans', 'Roboto', sans-serif;
             background: var(--background);
             color: var(--text);
+        }
+        
+        /* Grid / Flex Layout with Fixed Left & Right and Auto Center */
+        .app-container {
             display: flex;
+            width: 100vw;
             height: 100vh;
             overflow: hidden;
         }
         
-        /* 1. Left Sidebar: Context & Balances */
+        /* 1. Left Sidebar: Compact (220px fixed) */
         .sidebar {
-            width: 290px;
+            width: 220px;
+            min-width: 200px;
+            max-width: 240px;
+            flex-shrink: 0;
             background: var(--surface);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            padding: 18px;
-            gap: 16px;
+            padding: 12px;
+            gap: 12px;
             overflow-y: auto;
+            height: 100vh;
         }
         .brand {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            font-size: 1.05rem;
+            font-size: 0.95rem;
             font-weight: 700;
             color: var(--primary);
-            padding-bottom: 12px;
+            padding-bottom: 8px;
             border-bottom: 1px solid var(--border);
         }
         .badge {
             background: var(--primary-light);
             color: var(--primary);
-            font-size: 0.72rem;
-            padding: 3px 8px;
-            border-radius: 12px;
+            font-size: 0.68rem;
+            padding: 2px 6px;
+            border-radius: 10px;
             font-weight: 600;
         }
         .card {
-            background: #fcfcfc;
+            background: #fdfdfd;
             border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 12px 14px;
+            border-radius: 8px;
+            padding: 8px 10px;
         }
         .card-title {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             color: var(--text-secondary);
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
-        .profile-row { font-size: 0.85rem; margin-bottom: 6px; color: var(--text); }
+        .profile-row { font-size: 0.78rem; margin-bottom: 4px; color: var(--text); line-height: 1.3; }
         .balance-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 0.85rem;
-            padding: 6px 0;
+            font-size: 0.78rem;
+            padding: 4px 0;
             border-bottom: 1px solid var(--border-light);
         }
         .balance-item:last-child { border-bottom: none; }
         
-        /* 2. Center Panel: Pure Conversational Chat Stream */
+        /* 2. Center Panel: Fluid Chat Stream (Flex: 1) */
         .main-chat {
             flex: 1;
+            min-width: 320px;
             display: flex;
             flex-direction: column;
             background: var(--surface);
             border-right: 1px solid var(--border);
+            height: 100vh;
+            overflow: hidden;
         }
         .chat-header {
-            padding: 14px 24px;
+            padding: 10px 16px;
             border-bottom: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
             background: var(--surface);
+            flex-shrink: 0;
         }
         .chat-messages {
             flex: 1;
-            padding: 24px 32px;
+            padding: 16px 20px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 14px;
             background: #ffffff;
         }
         .msg {
-            max-width: 82%;
-            padding: 14px 18px;
-            border-radius: 14px;
-            line-height: 1.55;
-            font-size: 0.95rem;
-            box-shadow: 0 1px 2px rgba(60,64,67,0.08);
+            max-width: 90%;
+            padding: 10px 14px;
+            border-radius: 12px;
+            line-height: 1.5;
+            font-size: 0.88rem;
+            box-shadow: 0 1px 2px rgba(60,64,67,0.06);
         }
         .msg-user {
             align-self: flex-end;
@@ -483,24 +499,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .msg-agent a { color: var(--primary); font-weight: 500; text-decoration: none; }
         .msg-agent a:hover { text-decoration: underline; }
-        .msg-agent ul, .msg-agent ol { margin-left: 20px; margin-top: 8px; margin-bottom: 8px; }
-        .msg-agent li { margin-bottom: 4px; }
-        .msg-agent h3 { margin-top: 10px; margin-bottom: 6px; color: var(--primary); font-size: 1.05rem; }
+        .msg-agent ul, .msg-agent ol { margin-left: 16px; margin-top: 6px; margin-bottom: 6px; }
+        .msg-agent li { margin-bottom: 3px; }
+        .msg-agent h3 { margin-top: 8px; margin-bottom: 4px; color: var(--primary); font-size: 0.95rem; }
         
         .pills {
-            padding: 10px 24px;
+            padding: 8px 12px;
             display: flex;
-            gap: 8px;
+            gap: 6px;
             overflow-x: auto;
             border-top: 1px solid var(--border-light);
             background: #fafafa;
+            flex-shrink: 0;
         }
         .pill {
             background: #ffffff;
             border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 6px 14px;
-            font-size: 0.82rem;
+            border-radius: 14px;
+            padding: 4px 10px;
+            font-size: 0.75rem;
             cursor: pointer;
             white-space: nowrap;
             color: var(--text);
@@ -513,18 +530,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         
         .chat-input-area {
-            padding: 14px 24px;
+            padding: 10px 14px;
             display: flex;
-            gap: 12px;
+            gap: 8px;
             background: var(--surface);
             border-top: 1px solid var(--border);
+            flex-shrink: 0;
         }
         .chat-input {
             flex: 1;
-            padding: 12px 18px;
+            padding: 8px 14px;
             border: 1px solid var(--border);
-            border-radius: 24px;
-            font-size: 0.95rem;
+            border-radius: 20px;
+            font-size: 0.88rem;
             outline: none;
             font-family: inherit;
         }
@@ -533,183 +551,196 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: var(--primary);
             color: #ffffff;
             border: none;
-            border-radius: 24px;
-            padding: 0 24px;
+            border-radius: 20px;
+            padding: 0 18px;
             font-weight: 600;
-            font-size: 0.95rem;
+            font-size: 0.88rem;
             cursor: pointer;
             transition: background 0.2s;
         }
         .send-btn:hover { background: var(--primary-hover); }
 
-        /* 3. Right Panel: Execution Steps & Background Logs */
+        /* 3. Right Panel: Execution & Logs (320px fixed) */
         .exec-panel {
-            width: 420px;
+            width: 330px;
+            min-width: 290px;
+            max-width: 360px;
+            flex-shrink: 0;
             background: var(--surface);
             display: flex;
             flex-direction: column;
             height: 100vh;
+            overflow-y: auto;
         }
         .exec-header {
-            padding: 14px 18px;
+            padding: 10px 14px;
             border-bottom: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
             background: #fafafa;
+            flex-shrink: 0;
         }
         .exec-title {
-            font-size: 0.9rem;
+            font-size: 0.82rem;
             font-weight: 700;
             color: var(--text);
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
         .exec-content {
             flex: 1;
-            padding: 16px;
+            padding: 12px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 10px;
             background: #fdfdfd;
         }
         .trace-card {
             background: #ffffff;
             border: 1px solid #d2e3fc;
-            border-left: 4px solid var(--primary);
+            border-left: 3px solid var(--primary);
             border-radius: 6px;
-            padding: 10px 12px;
-            font-size: 0.82rem;
+            padding: 8px 10px;
+            font-size: 0.76rem;
         }
         .trace-header {
             display: flex;
             justify-content: space-between;
             font-weight: 600;
-            margin-bottom: 4px;
+            margin-bottom: 3px;
             color: var(--primary);
         }
         .trace-args {
             background: #f8f9fa;
             border-radius: 4px;
-            padding: 6px 8px;
-            margin-top: 6px;
+            padding: 4px 6px;
+            margin-top: 4px;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.76rem;
+            font-size: 0.7rem;
             color: #444;
             word-break: break-all;
         }
         .log-terminal {
             background: var(--log-bg);
             color: var(--log-text);
-            border-radius: 8px;
-            padding: 12px;
+            border-radius: 6px;
+            padding: 10px;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.74rem;
-            line-height: 1.45;
-            max-height: 380px;
+            font-size: 0.68rem;
+            line-height: 1.4;
+            max-height: 320px;
             overflow-y: auto;
             border: 1px solid #333;
         }
-        .log-line { margin-bottom: 4px; }
-        .log-time { color: #888; margin-right: 6px; }
+        .log-line { margin-bottom: 3px; }
+        .log-time { color: #888; margin-right: 4px; }
         .log-INFO { color: #61afef; }
         .log-SECURITY { color: #e5c07b; }
         .log-TOOL_CALL { color: #98c379; }
         .log-REASONING { color: #c678dd; }
         .log-GUARDRAIL { color: #e06c75; font-weight: bold; }
         .log-SUCCESS { color: #98c379; font-weight: bold; }
+
+        /* Custom Sleek Scrollbars */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #dadce0; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #bdc1c6; }
     </style>
 </head>
 <body>
-    <!-- 1. Left Sidebar -->
-    <div class="sidebar">
-        <div class="brand">
-            <span>✨ Altostrat HR</span>
-            <span class="badge">ADK 2.0</span>
-        </div>
-
-        <div class="card">
-            <div class="card-title">Employee Profile</div>
-            <div class="profile-row"><strong>Name:</strong> Jane Doe</div>
-            <div class="profile-row"><strong>ID:</strong> EMP1024</div>
-            <div class="profile-row"><strong>Role:</strong> Staff Engineer</div>
-            <div class="profile-row"><strong>Status:</strong> <span class="badge" style="background:#e6f4ea; color:#137333;">Remote</span></div>
-            <div class="profile-row"><strong>Location:</strong> Austin, TX</div>
-        </div>
-
-        <div class="card">
-            <div class="card-title">WorkWeek Balances</div>
-            <div class="balance-item"><span>🏖️ Vacation</span><strong>15.0 Days</strong></div>
-            <div class="balance-item"><span>🤒 Sick (Outpatient)</span><strong>12.0 Days</strong></div>
-            <div class="balance-item"><span>🏥 Hospitalization</span><strong>46.0 Days</strong></div>
-            <div class="balance-item"><span>👶 Childcare</span><strong>5.0 Days</strong></div>
-        </div>
-
-        <div class="card">
-            <div class="card-title">OKF Knowledge Engine</div>
-            <div class="profile-row"><strong>Concepts:</strong> 21 Modular MDs</div>
-            <div class="profile-row"><strong>GCS Backend:</strong> gs://elevate-hr-policies/</div>
-            <div class="profile-row"><strong>Search Infra:</strong> <strong style="color:#137333;">$0 / Month</strong></div>
-        </div>
-    </div>
-
-    <!-- 2. Center Panel: Pure Chat Stream -->
-    <div class="main-chat">
-        <div class="chat-header">
-            <div>
-                <h2 style="font-size: 1.1rem; font-weight: 600;">HR & IT Concierge Assistant</h2>
-                <p style="font-size: 0.8rem; color: var(--text-secondary);">Grounded via Open Knowledge Format (OKF) & FastMCP Streamable HTTP</p>
+    <div class="app-container">
+        <!-- 1. Left Sidebar (Fixed 220px) -->
+        <div class="sidebar">
+            <div class="brand">
+                <span>✨ Altostrat HR</span>
+                <span class="badge">ADK 2.0</span>
             </div>
-            <span class="badge" style="background:#ceead6; color:#0d652d;">● Engine Live</span>
-        </div>
 
-        <div class="chat-messages" id="chatMessages">
-            <div class="msg msg-agent">
-                👋 Hello Jane! I am your <strong>Altostrat HR & IT Concierge Assistant</strong>. I can assist you with company policy inquiries, WorkWeek leave operations, and IT support tickets.<br><br>
-                Try asking a question or selecting one of the suggested prompts below!
+            <div class="card">
+                <div class="card-title">Employee Profile</div>
+                <div class="profile-row"><strong>Name:</strong> Jane Doe</div>
+                <div class="profile-row"><strong>ID:</strong> EMP1024</div>
+                <div class="profile-row"><strong>Role:</strong> Staff Engineer</div>
+                <div class="profile-row"><strong>Status:</strong> <span class="badge" style="background:#e6f4ea; color:#137333;">Remote</span></div>
+                <div class="profile-row"><strong>Address:</strong> Austin, TX</div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">WorkWeek Balances</div>
+                <div class="balance-item"><span>🏖️ Vacation</span><strong>15.0 Days</strong></div>
+                <div class="balance-item"><span>🤒 Sick</span><strong>12.0 Days</strong></div>
+                <div class="balance-item"><span>🏥 Hospital</span><strong>46.0 Days</strong></div>
+                <div class="balance-item"><span>👶 Childcare</span><strong>5.0 Days</strong></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">OKF Knowledge Brain</div>
+                <div class="profile-row"><strong>Concepts:</strong> 21 Modular MDs</div>
+                <div class="profile-row"><strong>Storage:</strong> GCS Bucket</div>
+                <div class="profile-row"><strong>Infra Cost:</strong> <strong style="color:#137333;">$0 / Month</strong></div>
             </div>
         </div>
 
-        <div class="pills">
-            <button class="pill" onclick="sendPill('what is wfh policy?')">🏠 What is WFH policy?</button>
-            <button class="pill" onclick="sendPill('How many days of paid outpatient sick leave do I get in Singapore?')">🤒 Sick Leave Policy</button>
-            <button class="pill" onclick="sendPill('Can I expense a $45 gift card as a host gift when staying with a friend?')">🎁 Host Gift Rules</button>
-            <button class="pill" onclick="sendPill('Check my current vacation and sick balance')">🏖️ Check Balances</button>
-            <button class="pill" onclick="sendPill('Book 5 days vacation starting 2026-09-01')">✅ Book 5 Days Leave</button>
-            <button class="pill" onclick="sendPill('Book 20 days vacation starting 2026-09-01')">⚠️ Test Balance Guardrail</button>
-            <button class="pill" onclick="sendPill('I work remotely. What is my equipment allowance and can you order a 27-inch monitor?')">🖥️ Remote Monitor (UC-2.1)</button>
-        </div>
-
-        <div class="chat-input-area">
-            <input type="text" id="userInput" class="chat-input" placeholder="Ask about WFH policy, leave booking, equipment orders..." onkeypress="handleKey(event)">
-            <button class="send-btn" onclick="sendMessage()">Send</button>
-        </div>
-    </div>
-
-    <!-- 3. Right Panel: Execution Steps & Background Logs Inspector -->
-    <div class="exec-panel">
-        <div class="exec-header">
-            <div class="exec-title">
-                <span>⚡ Execution Steps & Telemetry</span>
+        <!-- 2. Center Panel: Focused Chat Stream -->
+        <div class="main-chat">
+            <div class="chat-header">
+                <div>
+                    <h2 style="font-size: 0.98rem; font-weight: 600;">HR & IT Concierge Assistant</h2>
+                    <p style="font-size: 0.74rem; color: var(--text-secondary);">Grounded via OKF Knowledge Engine & FastMCP</p>
+                </div>
+                <span class="badge" style="background:#ceead6; color:#0d652d;">● Engine Live</span>
             </div>
-            <span id="turnLatency" class="badge" style="background:#f1f3f4; color:#5f6368;">Ready</span>
-        </div>
 
-        <div class="exec-content">
-            <div class="card-title">Executed Tool & Sub-Agent Steps</div>
-            <div id="traceContainer" style="display: flex; flex-direction: column; gap: 8px;">
-                <div style="font-size: 0.82rem; color: #888; font-style: italic;">
-                    No execution steps yet. Send a query to observe real-time tool dispatches.
+            <div class="chat-messages" id="chatMessages">
+                <div class="msg msg-agent">
+                    👋 Hello Jane! I am your <strong>Altostrat HR & IT Concierge Assistant</strong>. I can assist you with company policy inquiries, WorkWeek leave operations, and IT support tickets.<br><br>
+                    Try asking a question or selecting one of the suggested prompts below!
                 </div>
             </div>
 
-            <div class="card-title" style="margin-top: 10px;">Background Execution Logs</div>
-            <div class="log-terminal" id="logTerminal">
-                <div class="log-line"><span class="log-time">[System]</span> <span class="log-INFO">HR Multi-Agent Engine initialized.</span></div>
-                <div class="log-line"><span class="log-time">[System]</span> <span class="log-TOOL_CALL">Loaded 21 OKF concepts from knowledge/ bundle.</span></div>
-                <div class="log-line"><span class="log-time">[System]</span> <span class="log-SECURITY">Model Armor security templates active.</span></div>
+            <div class="pills">
+                <button class="pill" onclick="sendPill('what is wfh policy?')">🏠 What is WFH policy?</button>
+                <button class="pill" onclick="sendPill('How many days of paid outpatient sick leave do I get in Singapore?')">🤒 Sick Leave</button>
+                <button class="pill" onclick="sendPill('Can I expense a $45 gift card as a host gift when staying with a friend?')">🎁 Host Gift Rules</button>
+                <button class="pill" onclick="sendPill('Check my current vacation and sick balance')">🏖️ Balances</button>
+                <button class="pill" onclick="sendPill('Book 5 days vacation starting 2026-09-01')">✅ Book 5d Leave</button>
+                <button class="pill" onclick="sendPill('Book 20 days vacation starting 2026-09-01')">⚠️ Test Guardrail</button>
+                <button class="pill" onclick="sendPill('I work remotely. What is my equipment allowance and can you order a 27-inch monitor?')">🖥️ Remote Monitor</button>
+            </div>
+
+            <div class="chat-input-area">
+                <input type="text" id="userInput" class="chat-input" placeholder="Ask about WFH policy, leave booking, equipment..." onkeypress="handleKey(event)">
+                <button class="send-btn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+
+        <!-- 3. Right Panel: Execution Steps & Logs (Fixed 330px) -->
+        <div class="exec-panel">
+            <div class="exec-header">
+                <div class="exec-title">
+                    <span>⚡ Execution Steps & Logs</span>
+                </div>
+                <span id="turnLatency" class="badge" style="background:#f1f3f4; color:#5f6368;">Ready</span>
+            </div>
+
+            <div class="exec-content">
+                <div class="card-title">Executed Steps</div>
+                <div id="traceContainer" style="display: flex; flex-direction: column; gap: 6px;">
+                    <div style="font-size: 0.76rem; color: #888; font-style: italic;">
+                        Send a query to view live multi-agent dispatches.
+                    </div>
+                </div>
+
+                <div class="card-title" style="margin-top: 6px;">Background Execution Logs</div>
+                <div class="log-terminal" id="logTerminal">
+                    <div class="log-line"><span class="log-time">[System]</span> <span class="log-INFO">HR Multi-Agent Engine initialized.</span></div>
+                    <div class="log-line"><span class="log-time">[System]</span> <span class="log-TOOL_CALL">Loaded 21 OKF concepts into RAM cache.</span></div>
+                    <div class="log-line"><span class="log-time">[System]</span> <span class="log-SECURITY">Model Armor security filters ready.</span></div>
+                </div>
             </div>
         </div>
     </div>
@@ -733,26 +764,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function updateExecutionInspector(traces, logs, durationMs) {
-            // Update Latency Badge
-            document.getElementById('turnLatency').innerText = `Turn: ${durationMs}ms`;
+            document.getElementById('turnLatency').innerText = `${durationMs}ms`;
 
-            // Update Trace Cards
             const traceContainer = document.getElementById('traceContainer');
             if (traces && traces.length > 0) {
                 traceContainer.innerHTML = traces.map(t => `
                     <div class="trace-card">
                         <div class="trace-header">
                             <span>Step ${t.step || 1}: ${t.agent}</span>
-                            <span style="font-size: 0.72rem; color: ${t.status === 'SUCCESS' ? '#137333' : '#b06000'}; font-weight:700;">${t.status}</span>
+                            <span style="font-size: 0.68rem; color: ${t.status === 'SUCCESS' ? '#137333' : '#b06000'}; font-weight:700;">${t.status}</span>
                         </div>
                         <div style="color:#202124; margin-top:2px;">Tool: <code>${t.tool}</code></div>
                         <div class="trace-args">Args: ${JSON.stringify(t.args || {})}</div>
-                        <div style="font-size:0.75rem; color:#5f6368; margin-top:4px;">${t.result_summary || ''}</div>
+                        <div style="font-size:0.72rem; color:#5f6368; margin-top:3px;">${t.result_summary || ''}</div>
                     </div>
                 `).join('');
             }
 
-            // Update Log Terminal
             const logTerminal = document.getElementById('logTerminal');
             if (logs && logs.length > 0) {
                 const logLines = logs.map(l => `
