@@ -37,7 +37,7 @@ from agent.prompt import (
     WORKWEEK_SPECIALIST_INSTRUCTION,
     ITSM_SPECIALIST_INSTRUCTION,
 )
-from agent.tools.okf_tool import list_concepts_tool, read_concept_tool
+from agent.tools.search_tool import policy_search_tool
 from agent.state import TurnState
 
 # 1. Native FastMCP Toolsets (Streamable HTTP with X-MCP-Token)
@@ -55,13 +55,13 @@ serviceimmediately_mcp = McpToolset(
     )
 )
 
-# 2. Specialist: WorkWeek Agent (Standard Conversational Sub-Agent)
+# 2. Specialist: WorkWeek Agent (Option 2: Autonomous Tool Access for Policy Validation + FastMCP)
 workweek_specialist = Agent(
     name="workweek_specialist",
     model=MODEL_NAME,
-    description="Specialist handling WorkWeek HCM operations: employee profile lookups, contact updates, leave balances, and leave bookings.",
+    description="Specialist handling WorkWeek HCM operations: employee profile lookups, contact updates, leave balances, policy validation for time off, and leave bookings.",
     instruction=WORKWEEK_SPECIALIST_INSTRUCTION,
-    tools=[workweek_mcp, list_concepts_tool, read_concept_tool],
+    tools=[workweek_mcp, policy_search_tool],
 )
 
 # 3. Specialist: ITSM Agent (Standard Conversational Sub-Agent)
@@ -73,13 +73,13 @@ itsm_specialist = Agent(
     tools=[serviceimmediately_mcp],
 )
 
-# 4. Root Orchestrator: Concierge Agent
+# 4. Root Orchestrator: Main Concierge Agent
 concierge_agent = Agent(
     name="concierge_agent",
     model=MODEL_NAME,
     description="Primary Enterprise HR & IT Concierge Assistant orchestrating policy Q&A, WorkWeek HCM operations, and ITSM service desk tickets.",
     instruction=CONCIERGE_INSTRUCTION,
-    tools=[list_concepts_tool, read_concept_tool],
+    tools=[policy_search_tool],
     sub_agents=[workweek_specialist, itsm_specialist],
 )
 
