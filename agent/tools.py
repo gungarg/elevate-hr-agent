@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import urllib.request
 from typing import Optional, Any
 from pathlib import Path
 
@@ -13,9 +15,9 @@ except ImportError:
         def __init__(self, data_store_id: str, **kwargs):
             self.data_store_id = data_store_id
 
-from agent.config import DATA_STORE_PATH, PROJECT_ID
+from agent.config import DATA_STORE_PATH, PROJECT_ID, WORKWEEK_MCP_URL, SERVICEIMMEDIATELY_MCP_URL, MCP_TOKEN
 
-# Authoritative Singapore HR Policy Corpus (for local development & offline fallback)
+# 1. Authoritative Policy Corpus (for local development & offline fallback)
 _LOCAL_POLICY_CORPUS = [
     {
         "section": "1.1",
@@ -78,13 +80,6 @@ _LOCAL_POLICY_CORPUS = [
 def search_hr_policies(query: str, region_filter: str = "Singapore") -> list[dict[str, Any]]:
     """
     Performs semantic search across enterprise HR and IT policy documents in Vertex AI Search.
-
-    Args:
-        query: Natural-language policy inquiry or keyword phrase (e.g. 'outpatient sick leave', 'remote equipment allowance').
-        region_filter: Target geographic jurisdiction for policy applicability (default: 'Singapore').
-
-    Returns:
-        List of relevant policy segments with title, snippet content, section reference, and source URL.
     """
     # 1. Live Google Cloud Vertex AI Search Datastore Execution
     try:
@@ -111,7 +106,7 @@ def search_hr_policies(query: str, region_filter: str = "Singapore") -> list[dic
     except Exception:
         pass
 
-    # 2. Local semantic policy search fallback (for local test execution without GCP credentials)
+    # 2. Local semantic policy search fallback
     q_tokens = set(re.findall(r"\w+", query.lower()))
     best_match = None
     best_score = -1
@@ -147,3 +142,55 @@ def search_hr_policies(query: str, region_filter: str = "Singapore") -> list[dic
 policy_search_tool = FunctionTool(
     func=search_hr_policies
 )
+
+# 2. FastMCP Client Helpers (for app.py UI server & evaluation scripts)
+def call_fastmcp_tool(base_url: str, name: str, arguments: dict, token: str = MCP_TOKEN) -> Optional[dict]:
+    """Invokes a tool on a remote FastMCP server over JSON-RPC 2.0."""
+    call_data = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": name,
+            "arguments": arguments
+        }
+    }
+    try:
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/",
+            data=json.dumps(call_data).encode("utf-8"),
+            headers={"X-MCP-Token": token, "Content-Type": "application/json", "Accept": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("result", {})
+    except Exception:
+        pass
+    return None
+
+def read_fastmcp_resource(base_url: str, uri: str, token: str = MCP_TOKEN) -> Optional[dict]:
+    """Reads a resource on a remote FastMCP server via resources/read."""
+    req_data = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/read",
+        "params": {"uri": uri}
+    }
+    try:
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/",
+            data=json.dumps(req_data).encode("utf-8"),
+            headers={"X-MCP-Token": token, "Content-Type": "application/json", "Accept": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                contents = data.get("result", {}).get("contents", [])
+                if contents and "text" in contents[0]:
+                    return json.loads(contents[0]["text"])
+    except Exception:
+        pass
+    return None

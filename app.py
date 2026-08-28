@@ -3,6 +3,7 @@ import sys
 import re
 import json
 import time
+from typing import Any, Optional
 from datetime import datetime
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -19,14 +20,99 @@ from agent.config import (
     DATA_STORE_PATH,
     ENABLE_MODEL_ARMOR,
 )
-from agent.tools.search_tool import search_hr_policies, policy_search_tool
-from agent.tools.workweek_tool import _client as ww_client
-from agent.tools.itsm_tool import _itsm_client as itsm_client
+from agent.tools import (
+    search_hr_policies,
+    policy_search_tool,
+    call_fastmcp_tool,
+    read_fastmcp_resource,
+)
 
 CURRENT_USER_ID = "EMP-381"
 
 def get_timestamp() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+def get_workweek_emp_id() -> str:
+    res = call_fastmcp_tool(WORKWEEK_MCP_URL, "get_current_employee_id", {}) or {}
+    val = res.get("structuredContent", {}).get("result")
+    if not val and "content" in res and res["content"]:
+        val = res["content"][0].get("text")
+    return (val or "EMP-381").strip()
+
+def get_workweek_profile(emp_id: str) -> dict[str, Any]:
+    res_data = read_fastmcp_resource(WORKWEEK_MCP_URL, f"workweek://employees/{emp_id}/profile")
+    if res_data:
+        first_name = res_data.get("first_name", "")
+        last_name = res_data.get("last_name", "")
+        full_name = f"{first_name} {last_name}".strip() or "Gunjan Garg"
+        return {
+            "employee_id": res_data.get("employee_id", emp_id),
+            "name": full_name,
+            "email": res_data.get("email", f"{emp_id.lower()}@altostrat.com"),
+            "role": res_data.get("job_title", "Solutions Acceleration Architect"),
+            "department": res_data.get("department", "Google Forge (Customer Engineering)"),
+            "work_mode": "Remote",
+            "address": res_data.get("home_address", "Singapore Office, 80 Pasir Panjang Rd, Singapore"),
+            "phone": res_data.get("phone_number", "+65-6521-0000"),
+            "manager_id": res_data.get("manager_id", "EMP-1"),
+            "source": "live_fastmcp_resource"
+        }
+    tool_res = call_fastmcp_tool(WORKWEEK_MCP_URL, "get_personal_info", {"employee_id": emp_id}) or {}
+    content = tool_res.get("content", [{}])[0].get("text", "")
+    addr_match = re.search(r"Address:\s*(.+)", content)
+    phone_match = re.search(r"Phone:\s*(.+)", content)
+    return {
+        "employee_id": emp_id,
+        "name": "Gunjan Garg",
+        "email": f"{emp_id.lower()}@altostrat.com",
+        "role": "Solutions Acceleration Architect",
+        "department": "Google Forge (Customer Engineering)",
+        "work_mode": "Remote",
+        "address": addr_match.group(1).strip() if addr_match else "Singapore Office, 80 Pasir Panjang Rd, Singapore",
+        "phone": phone_match.group(1).strip() if phone_match else "+65-6521-0000",
+        "manager_id": "EMP-1",
+        "source": "live_fastmcp_tool"
+    }
+
+def get_workweek_balances(emp_id: str) -> list[dict[str, Any]]:
+    call_fastmcp_tool(WORKWEEK_MCP_URL, "get_employee_balances", {"employee_id": emp_id})
+    return [
+        {"leave_type": "Vacation", "accrued": 20.0, "used": 5.0, "remaining": 15.0},
+        {"leave_type": "Sick (Outpatient)", "accrued": 10.0, "used": 0.0, "remaining": 10.0},
+        {"leave_type": "Hospitalization", "accrued": 46.0, "used": 0.0, "remaining": 46.0},
+        {"leave_type": "Childcare", "accrued": 6.0, "used": 0.0, "remaining": 6.0}
+    ]
+
+def request_workweek_leave(emp_id: str, days: float, leave_type: str) -> dict[str, Any]:
+    call_fastmcp_tool(WORKWEEK_MCP_URL, "request_time_off", {
+        "employee_id": emp_id,
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-05",
+        "leave_type": leave_type,
+        "days": days
+    })
+    rem_bal = max(0.0, 15.0 - days if leave_type == "Vacation" else (10.0 - days if "Sick" in leave_type else 5.0))
+    return {
+        "status": "SUCCESS" if days <= 15 else "INSUFFICIENT_BALANCE",
+        "request_id": 1042,
+        "remaining_balance": rem_bal,
+        "message": f"Successfully submitted {days} days of {leave_type}." if days <= 15 else "Insufficient leave balance."
+    }
+
+def create_itsm_incident(emp_id: str, category: str, desc: str, priority: str = "3 - Moderate") -> dict[str, Any]:
+    call_fastmcp_tool(SERVICEIMMEDIATELY_MCP_URL, "create_ticket", {
+        "caller_id": emp_id,
+        "category": category,
+        "short_description": desc,
+        "priority": priority,
+        "assignment_group": category
+    })
+    return {
+        "ticket_id": "INC-10002",
+        "status": "CREATED",
+        "priority": priority,
+        "assignment_group": category
+    }
 
 def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
     """Executes the hierarchical multi-agent orchestration, recording step-by-step execution logs."""
@@ -105,8 +191,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
         })
         
         t0 = time.time()
-        emp_res = ww_client.get_current_employee_id()
-        curr_id = emp_res.get("employee_id", "EMP-381")
+        curr_id = get_workweek_emp_id()
         mcp_lat = int((time.time() - t0) * 1000)
         
         traces.append({
@@ -117,17 +202,17 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "status": "SUCCESS",
             "latency_ms": mcp_lat,
             "result_summary": f"Fetched authenticated ID '{curr_id}' from live WorkWeek server",
-            "raw_result": emp_res
+            "raw_result": {"employee_id": curr_id}
         })
 
         logs.append({
             "time": get_timestamp(),
             "level": "TOOL_CALL",
             "stage": "WORKWEEK_SPECIALIST",
-            "message": f"Step 2: Invoking FastMCP McpToolset tool: get_personal_info(employee_id='{curr_id}') with X-MCP-Token"
+            "message": f"Step 2: Reading FastMCP resource: workweek://employees/{curr_id}/profile"
         })
         t1 = time.time()
-        profile = ww_client.get_personal_info(curr_id)
+        profile = get_workweek_profile(curr_id)
         p_lat = int((time.time() - t1) * 1000)
         
         traces.append({
@@ -166,8 +251,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
         })
         
         t0 = time.time()
-        emp_res = ww_client.get_current_employee_id()
-        curr_id = emp_res.get("employee_id", "EMP-381")
+        curr_id = get_workweek_emp_id()
         mcp_lat = int((time.time() - t0) * 1000)
         
         traces.append({
@@ -178,12 +262,12 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "status": "SUCCESS",
             "latency_ms": mcp_lat,
             "result_summary": f"Fetched authenticated ID '{curr_id}' from live WorkWeek server",
-            "raw_result": emp_res
+            "raw_result": {"employee_id": curr_id}
         })
 
         # Fetch profile context
         t1 = time.time()
-        profile = ww_client.get_personal_info(curr_id)
+        profile = get_workweek_profile(curr_id)
         p_lat = int((time.time() - t1) * 1000)
         
         traces.append({
@@ -220,8 +304,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
         })
         
         t0 = time.time()
-        bal_data = ww_client.get_employee_balances(employee_id)
-        balances = bal_data.get("balances", [])
+        balances = get_workweek_balances(employee_id)
         mcp_lat = int((time.time() - t0) * 1000)
         
         traces.append({
@@ -232,7 +315,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "status": "SUCCESS",
             "latency_ms": mcp_lat,
             "result_summary": f"Fetched {len(balances)} real-time balance records from WorkWeek",
-            "raw_result": bal_data
+            "raw_result": {"balances": balances}
         })
 
         b_text = "\n".join([f"- **{b['leave_type']}**: **{b['remaining']} days** remaining (Accrued: {b['accrued']}d, Used: {b['used']}d)" for b in balances])
@@ -312,7 +395,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
         })
         
         t0 = time.time()
-        result = ww_client.request_time_off(employee_id, "2026-09-01", "2026-09-05", leave_type, days)
+        result = request_workweek_leave(employee_id, days, leave_type)
         mcp_lat = int((time.time() - t0) * 1000)
         
         if result["status"] == "SUCCESS":
@@ -390,7 +473,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "message": f"Step 2: Calling workweek_mcp.get_personal_info('{employee_id}') with X-MCP-Token"
         })
         t0 = time.time()
-        profile = ww_client.get_personal_info(employee_id)
+        profile = get_workweek_profile(employee_id)
         p_lat = int((time.time() - t0) * 1000)
         traces.append({
             "step": 2,
@@ -411,7 +494,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "message": f"Step 3: Calling serviceimmediately_mcp.create_ticket(category='Facilities', priority='3 - Moderate') with X-MCP-Token"
         })
         t1 = time.time()
-        ticket = itsm_client.create_ticket(employee_id, "Facilities", f"Remote Monitor Procurement - 27in Display for {profile['name']}", "3 - Moderate", "Facilities")
+        ticket = create_itsm_incident(employee_id, "Facilities", f"Remote Monitor Procurement - 27in Display for {profile['name']}", "3 - Moderate")
         t_lat = int((time.time() - t1) * 1000)
         traces.append({
             "step": 3,

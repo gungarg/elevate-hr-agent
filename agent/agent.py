@@ -37,7 +37,7 @@ from agent.prompt import (
     WORKWEEK_SPECIALIST_INSTRUCTION,
     ITSM_SPECIALIST_INSTRUCTION,
 )
-from agent.tools.search_tool import policy_search_tool
+from agent.tools import policy_search_tool
 from agent.state import TurnState
 
 # 1. Native FastMCP Toolsets (Streamable HTTP with X-MCP-Token)
