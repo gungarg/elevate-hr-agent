@@ -1,102 +1,72 @@
-# Implementation Plan: Knowledge Retrieval Strategy (OKF vs. RAG)
+# Implementation Plan: Semantic Knowledge Retrieval Strategy via Vertex AI Search
 
-## Goal Description
-Evaluate and determine the optimal knowledge retrieval architecture for the Enterprise HR Multi-Agent System given a **limited, bounded set of corporate HR policy documents** (e.g., Leave Policies, Remote Work Guidelines, Expense Policies, Code of Conduct). Compare **Open Knowledge Format (OKF)** against **Traditional Retrieval-Augmented Generation (RAG via Vertex AI Search)** and propose an implementation plan for the SDD.
-
----
-
-## User Review Required
-
-> [!IMPORTANT]
-> **Key Architectural Trade-Off:**
-> - **Open Knowledge Format (OKF):** Converts the limited policy corpus into structured, version-controlled Markdown concept files with YAML frontmatter metadata (`knowledge/` bundle). The agent uses deterministic `list_concepts()` and `read_concept()` tool calls. Eliminates vector search noise, eliminates chunk truncation, provides 100% deterministic grounding, and incurs $0 search infrastructure fees.
-> - **Traditional RAG (Vertex AI Search):** Ingests raw PDFs into Vertex AI Search with vector chunking and dense embeddings. Requires less upfront document reformatting, but introduces chunk boundary fragmentation and ongoing search API query costs.
+## 1. Goal Description
+Evaluate and formalize the semantic knowledge retrieval architecture for the Enterprise HR Multi-Agent System across corporate HR policy documents (Leave Policies, Remote Work & Equipment, Travel & Expense Reimbursements, Code of Conduct). Document the selection of **Google Cloud Vertex AI Search (Enterprise Datastore on GCS)** as the authoritative semantic search engine and define its integration into the multi-agent system.
 
 ---
 
-## Comparative Evaluation Matrix
+## 2. Architectural Selection: Google Cloud Vertex AI Search
 
-| Architectural Dimension | Open Knowledge Format (OKF) | Traditional RAG (Vertex AI Search) | Recommendation for Limited Docs |
+To deliver high-accuracy, natural-language semantic retrieval without manual chunk management or brittle keyword matching, the enterprise architecture standardizes on **Google Cloud Vertex AI Search (Enterprise Datastore)**.
+
+```
++---------------------------------------------------------------------------------------------------------------+
+|                                      VERTEX AI SEARCH POLICY RETRIEVAL TIER                                   |
++---------------------------------------------------------------------------------------------------------------+
+|                                                                                                               |
+|  [Authoritative Corporate Documents] (Singapore Policy Handbook, PDFs, Docs, Markdown)                      |
+|         │                                                                                                     |
+|         ▼ Automated Ingestion & Cloud Storage Sync                                                            |
+|  [Google Cloud Storage Bucket]: `gs://<project>-hr-policies/raw_docs/`                                        |
+|         │                                                                                                     |
+|         ▼ Auto-Indexing & Layout-Aware Semantic Parsing                                                       |
+|  [Vertex AI Search Datastore] (`hr-policy-datastore`)                                                          |
+|    ├── Dense Vector Embeddings (`text-embedding-005` / Multilingual Gecko)                                    |
+|    ├── Hybrid Semantic + Lexical Matcher with Google Neural Re-Ranking                                        |
+|    └── Metadata Faceting: `region: "Singapore"`, `category: "Time Off"`, `effective_date: "2026"`             |
+|         ▲                                                                                                     |
+|         │ Semantic Tool Call: `policy_search_tool(query="wfh equipment allowance", region="SG")`              |
+|         │ Returns: Extractive answer segments, snippet grounding, and exact document title/URL citations      |
+|  [Agents]: Main Concierge Agent & WorkWeek Specialist Agent                                                   |
+|                                                                                                               |
++---------------------------------------------------------------------------------------------------------------+
+```
+
+---
+
+## 3. Comparative Evaluation Matrix
+
+| Architectural Dimension | Vertex AI Search (Enterprise Datastore) | Legacy Keyword Matching / Manual Frontmatter | Verdict |
 | :--- | :--- | :--- | :--- |
-| **Corpus Scale & Fit** | Tailored for **bounded, curated enterprise knowledge** (5–50 documents / ~100–150 modular concept files). | Designed for **massive, unbounded document lakes** (thousands of unstructured files). | 🏆 **OKF** |
-| **Retrieval Fidelity** | **100% Deterministic:** Agent inspects frontmatter metadata (title, description, tags) and reads complete, intact concept markdown without chunk boundaries. | **Probabilistic:** Vector cosine similarity on 500-token chunks; risks splitting conditions across chunk boundaries. | 🏆 **OKF** |
-| **Citation Precision** | **Exact & Verifiable:** Explicit frontmatter provenance (`sources`, `resource`, `section`) and markdown footnotes (`[^fn1]`). | Extractive text segments with probabilistic page metadata. | 🏆 **OKF** |
-| **FinOps & Infra Cost** | **$0 Search Infra Cost:** Knowledge bundle lives in local container directory or Cloud Storage; zero embedding or vector indexing fees. | Incurs Vertex AI Search indexing fees ($/GiB/mo) + query fees ($/1K search ops). | 🏆 **OKF** |
-| **Governance & GitOps** | **Knowledge-as-Code:** HR policies live in Git; changes are tracked via Pull Requests, line-by-line diffs, and `stale_after` freshness metadata. | Unstructured PDFs managed in Cloud Storage buckets; opaque indexing. | 🏆 **OKF** |
-| **Authoring Effort** | Requires initial conversion of HR PDFs into structured Markdown concept files with YAML frontmatter. | Low upfront effort: Upload raw PDF files directly. | ⚖️ **RAG** (if zero document curation is desired) |
+| **Semantic Comprehension** | **High:** Understands natural synonyms, intent, and complex paraphrasing (e.g. *"grief leave for parent"* $\rightarrow$ *Section 3.1 Bereavement Leave*). | **Low:** Requires exact keyword or synonym dictionary matches. | 🏆 **Vertex AI Search** |
+| **Document Ingestion** | **Zero Manual Formatting:** Ingests raw PDFs, Google Docs, Markdown, and HTML with layout-aware table and header parsing. | **High Manual Effort:** Requires manual markdown conversion and YAML frontmatter tagging. | 🏆 **Vertex AI Search** |
+| **Retrieval Accuracy** | **Hybrid + Neural Re-ranking:** Combines BM25 lexical precision with dense vector embeddings and Google's production neural re-ranker. | Static string overlap or basic TF-IDF without re-ranking. | 🏆 **Vertex AI Search** |
+| **Attribution & Footnotes** | **Exact Snippet Grounding:** Returns extractive segments, verbatim paragraph context, document titles, and source URLs. | Relies on manually embedded frontmatter URLs. | 🏆 **Vertex AI Search** |
+| **Operational Maintenance** | **Fully Managed Serverless:** $0 vector database VM maintenance, auto-indexes on GCS file changes. | Requires maintaining local file parsers and cache invalidation. | 🏆 **Vertex AI Search** |
 
 ---
 
-## Architectural Recommendation: **Adopt OKF as Primary Strategy**
+## 4. Multi-Agent Integration Pattern (Option 2: Autonomous Specialist Access)
 
-For a limited policy corpus (where the total number of policies is bounded and known), **Open Knowledge Format (OKF)** is overwhelmingly superior to vector RAG:
+Both the **Root Concierge Agent** and the **WorkWeek Specialist Agent** are directly equipped with `policy_search_tool`:
 
-```mermaid
-flowchart TD
-    subgraph OKF_Pipeline ["Open Knowledge Format (OKF) Execution"]
-        UserQuery["Employee: 'How many days of bereavement leave do I get?'"]
-        Concierge["Concierge Agent (Gemini 3.5 Flash)"]
-        
-        ListTool["list_concepts() Tool\n(Scans YAML frontmatter in knowledge/ bundle)"]
-        ReadTool["read_concept('01-paid-time-off/bereavement') Tool\n(Parses complete markdown concept & citations)"]
-        
-        BundleStore[("OKF Knowledge Bundle (Git / Local)\n* 01-paid-time-off/\n* 02-expenses/\n* 03-remote-work/")]
-        
-        UserQuery --> Concierge
-        Concierge -->|Step 1: Discover Concept| ListTool
-        ListTool <--> BundleStore
-        ListTool -->>|Returns matched concept_id| Concierge
-        Concierge -->|Step 2: Read Full Concept| ReadTool
-        ReadTool <--> BundleStore
-        ReadTool -->>|Returns intact policy text + citations| Concierge
-        Concierge -->>|100% Grounded Answer with Citations| EmployeeResponse["Grounded Response with Clickable Footnotes"]
-    end
-```
-
-### Why OKF Solves Core RAG Failure Modes in HR Policies:
-1. **No Fragmented Policy Clauses:** In HR policies, conditions are tightly coupled (e.g., *"Bereavement leave is 5 days for immediate family, 3 days for extended family, and requires manager sign-off if travel exceeds 500 miles"*). RAG chunking frequently cuts across these sentences; OKF preserves the entire concept as a single atomic unit.
-2. **Deterministic Two-Step Progressive Disclosure:**
-   - `list_concepts()`: Returns a compact YAML list of available policy concepts (~150 tokens), allowing the LLM to pick the exact concept ID.
-   - `read_concept(concept_id)`: Ingests the exact targeted policy markdown file.
-3. **Built-in Provenance & Freshness:** OKF concepts carry `verified: {by: "hr-policy-team", at: "2026-08-01"}` and `stale_after: "2027-01-01"`, enabling automated auditing for outdated policies.
-
----
-
-## Proposed Changes to System Design Document (SDD)
-
-### 1. Update Knowledge Layer in Architecture (Section 1.3 & 3.2)
-- Replace generic Vertex AI Search with the **OKF Knowledge Engine**:
-  - `knowledge/` directory bundle structured by HR domains (`01-leave-policies/`, `02-remote-work/`, `03-expenses/`, `04-code-of-conduct/`).
-  - Tools equipped on Concierge: `list_concepts()` and `read_concept(concept_id)`.
-
-### 2. Update Tool Signatures (Section 5.1)
 ```python
-def list_concepts(domain: Optional[str] = None) -> list[dict]:
-    """Lists available HR policy concepts with title, description, and tags from YAML frontmatter."""
-    ...
+from google.adk.tools import VertexAiSearchTool
 
-def read_concept(concept_id: str) -> dict:
-    """Reads the full markdown body, metadata, and citation sources for a specific concept."""
-    ...
+# Connect to the managed Vertex AI Search Datastore
+policy_search_tool = VertexAiSearchTool(
+    data_store_id="projects/{PROJECT_ID}/locations/{LOCATION}/collections/default_collection/dataStores/hr-policy-datastore"
+)
 ```
 
-### 3. Update FinOps (Section 6)
-- Remove recurring Vertex AI Search query fees ($8.00 / 1K queries), further lowering monthly operational TCO.
+### Execution Responsibilities:
+1. **Concierge Agent (General Q&A):** Resolves standalone policy questions (e.g., *"What is the policy on host gifts when traveling?"*) in a single turn with grounded citations.
+2. **WorkWeek Specialist (Autonomous Policy Validation):** When processing transactional leave bookings (e.g., *"Add 5 days sick leave"*), the specialist directly queries `policy_search_tool` to verify rules (e.g., Singapore Section 1.1: Sick leave $>2$ days requires a Medical Certificate within 48h) before calling FastMCP `request_time_off`.
 
 ---
 
-## Verification Plan
+## 5. FinOps & Sizing
 
-### Automated Tests
-1. Conformance test of OKF bundle:
-   ```bash
-   uv run python knowledge/check_okf.py knowledge/
-   ```
-2. Accuracy & Grounding eval across 50 golden policy benchmark questions:
-   ```bash
-   agents-cli eval run --dataset tests/eval/datasets/policy_benchmark.json
-   ```
-
-### Manual Verification
-1. Verify that `list_concepts()` returns all available HR topics without loading file bodies.
-2. Test complex policy questions (e.g., bereavement leave, host gifts expense rules) and verify zero hallucination with exact footnote citations.
+* **Query Volume:** 25,000 policy searches/month for 5,000 active employees.
+* **Pricing Rate:** \$2.00 per 1,000 queries.
+* **Estimated Cost:** **\$50.00 / month** (\$0.01 / employee / month).

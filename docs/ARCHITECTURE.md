@@ -1,6 +1,6 @@
-# System Architecture: Enterprise HR & IT Multi-Agent Assistant (Revision 4.0)
+# System Architecture: Enterprise HR & IT Multi-Agent Assistant (Revision 5.0)
 
-This document details the modernized technical architecture for the **Enterprise HR & IT Multi-Agent Assistant** built on **Google Agent Development Kit (ADK 2.0)**, deployed on **Vertex AI Agent Engine (Agent Runtime)**, powered by **Vertex AI Search (Enterprise Datastore)**, and integrated with **WorkWeek** and **ServiceImmediately** via **FastMCP Streamable HTTP**.
+This document details the technical architecture for the **Enterprise HR & IT Multi-Agent Assistant** built on **Google Agent Development Kit (ADK 2.0)**, deployed on **Vertex AI Agent Engine (Agent Runtime)**, powered by **Vertex AI Search (Enterprise Datastore)**, and integrated with **WorkWeek** and **ServiceImmediately** via **FastMCP Streamable HTTP** using standard conversational sub-agents with autonomous specialist policy validation (**Option 2**).
 
 ---
 
@@ -27,8 +27,8 @@ flowchart TD
     end
 
     subgraph FastMCPIntegrations ["FastMCP Streamable HTTP SaaS Tier (X-MCP-Token)"]
-        WW_Agent["WorkWeek Specialist Agent (mode='task')\n* McpToolset: /work-week/mcp/"]
-        ITSM_Agent["ITSM Specialist Agent (mode='task')\n* McpToolset: /service-immediately/mcp/"]
+        WW_Agent["WorkWeek Specialist Sub-Agent\n* Tools: workweek_mcp + policy_search_tool"]
+        ITSM_Agent["ITSM Specialist Sub-Agent\n* Tools: serviceimmediately_mcp"]
         
         WW_SaaS[("WorkWeek Mock SaaS\n(Profiles, Balances, Bookings)")]
         ITSM_SaaS[("ServiceImmediately Mock SaaS\n(Incidents, Comments, State Machine)")]
@@ -40,6 +40,7 @@ flowchart TD
     Concierge <--> VAS
     Concierge --> WW_Agent
     Concierge --> ITSM_Agent
+    WW_Agent <-->|Direct Policy Validation| VAS
     WW_Agent <-->|Streamable HTTP\nX-MCP-Token| WW_SaaS
     ITSM_Agent <-->|Streamable HTTP\nX-MCP-Token| ITSM_SaaS
     Concierge --> MA_Output
@@ -48,7 +49,7 @@ flowchart TD
 
 ---
 
-## 2. Multi-Agent Topology & Delegations
+## 2. Multi-Agent Delegation & Tool Access Pattern (Option 2)
 
 ```
 +---------------------------------------------------------------------------------------------------------------+
@@ -59,32 +60,36 @@ flowchart TD
 |                                             (Gemini 3.5 Flash)                                                |
 |                                                      │                                                        |
 |                   ┌──────────────────────────────────┼──────────────────────────────────┐                     |
-|                   │ Direct Tool                      │ Task Delegation                  │ Task Delegation     |
-|                   ▼                                  ▼                                  ▼                     |
+|                   │ Direct Tool                      │ Conversational Delegation        │ Conversational      |
+|                   ▼                                  ▼                                  ▼ Delegation          |
 |        [policy_search_tool]                [workweek_specialist]                [itsm_specialist]             |
-|    (Vertex AI Search Datastore)             (`mode="task"`)                      (`mode="task"`)              |
-|                   │                                  │                                  │                     |
-|                   │                                  ▼ Streamable HTTP                  ▼ Streamable HTTP     |
-|                   │                        [WorkWeek FastMCP Server]        [ServiceImmediately FastMCP]      |
-|                   │                         (/work-week/mcp/)                (/service-immediately/mcp/)      |
+|    (Vertex AI Search Datastore)            (Standard Sub-Agent)                 (Standard Sub-Agent)          |
+|                   ▲                                  │                                  │                     |
+|                   │ Direct Policy Check              │                                  │                     |
+|                   └──────────────────────────────────┤                                  │                     |
+|                                                      ▼ Streamable HTTP                  ▼ Streamable HTTP     |
+|                                            [WorkWeek FastMCP Server]        [ServiceImmediately FastMCP]      |
+|                                             (/work-week/mcp/)                (/service-immediately/mcp/)      |
 |                                                                                                               |
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
 1. **`concierge_agent` (Root Orchestrator):**  
-   Directly equipped with `policy_search_tool` (Vertex AI Search) to resolve policy questions in a single turn. Orchestrates multi-step workflows across specialists.
-2. **`workweek_specialist` (HCM Specialist):**  
-   Invoked in `mode="task"`, outputs typed `WorkWeekTaskOutput`. Uses native `McpToolset` connected to `/work-week/mcp/` with `X-MCP-Token`.
-3. **`itsm_specialist` (ITSM Specialist):**  
-   Invoked in `mode="task"`, outputs typed `ITSMTaskOutput`. Uses native `McpToolset` connected to `/service-immediately/mcp/` with `X-MCP-Token`.
+   Directly equipped with `policy_search_tool` (Vertex AI Search) to resolve general policy questions in a single turn. Automatically delegates interactive conversations to specialists via standard ADK routing (`sub_agents=[workweek_specialist, itsm_specialist]`).
+2. **`workweek_specialist` (HCM Specialist Sub-Agent):**  
+   Equipped with both `workweek_mcp` and `policy_search_tool`. Autonomously verifies policy constraints (e.g. Medical Certificate rules for $>2$ days sick leave) and executes bookings via FastMCP without parent routing overhead.
+3. **`itsm_specialist` (ITSM Specialist Sub-Agent):**  
+   Standard conversational sub-agent using native `McpToolset` connected to `/service-immediately/mcp/` with `X-MCP-Token`.
 
 ---
 
-## 3. Key Design Decisions (Revision 4.0)
+## 3. Key Design Decisions (Revision 5.0)
 
 | Area | Decision | Rationale |
 | :--- | :--- | :--- |
+| **Specialist Policy Validation Workflow** | **Option 2: Autonomous Specialist Tool Access (`tools=[workweek_mcp, policy_search_tool]`)** | Eliminates 4–5 hop triangular ping-pong routing between parent and child, providing single-turn policy validation and execution with exact compliance reminders. |
 | **Knowledge Retrieval** | **Vertex AI Search** (Enterprise Datastore) | Replaces manual OKF chunking with managed dense vector + lexical hybrid semantic search, neural re-ranking, and layout-aware document ingestion. |
+| **Multi-Agent Mode** | **Standard Conversational Sub-Agents** | Uses native ADK conversation transfer (`sub_agents=[...]`) for a natural multi-agent dialogue without custom Pydantic task wrappers. |
 | **Network Ingress** | **Direct to Agent Engine** (Removed Agent Gateway) | Eliminates extra proxy hop ($15\text{--}30\text{ms}$ latency savings) and leverages native IAM/OAuth2 endpoints on Vertex AI Agent Engine. |
 | **Security Tier** | **Model Armor Only** (Removed Cloud Armor) | Focuses security on GenAI prompt sanitization, jailbreak prevention, and SPII masking (<50ms latency), removing redundant network WAF costs. |
 | **MCP Connectivity** | **Native ADK `McpToolset`** | Connects statelessly over FastMCP Streamable HTTP with `X-MCP-Token` header, auto-discovering remote tool schemas with zero wrapper code. |

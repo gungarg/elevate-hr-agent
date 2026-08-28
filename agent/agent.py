@@ -37,7 +37,6 @@ from agent.prompt import (
     WORKWEEK_SPECIALIST_INSTRUCTION,
     ITSM_SPECIALIST_INSTRUCTION,
 )
-from agent.schemas import WorkWeekTaskOutput, ITSMTaskOutput
 from agent.tools.okf_tool import list_concepts_tool, read_concept_tool
 from agent.state import TurnState
 
@@ -56,24 +55,20 @@ serviceimmediately_mcp = McpToolset(
     )
 )
 
-# 2. Specialist: WorkWeek Agent (mode='task' with typed output schema)
+# 2. Specialist: WorkWeek Agent (Standard Conversational Sub-Agent)
 workweek_specialist = Agent(
     name="workweek_specialist",
     model=MODEL_NAME,
-    mode="task",
-    output_schema=WorkWeekTaskOutput,
-    description="Handles WorkWeek HCM operations: employee profile lookups, contact updates, leave balances, and leave bookings.",
+    description="Specialist handling WorkWeek HCM operations: employee profile lookups, contact updates, leave balances, and leave bookings.",
     instruction=WORKWEEK_SPECIALIST_INSTRUCTION,
     tools=[workweek_mcp, list_concepts_tool, read_concept_tool],
 )
 
-# 3. Specialist: ITSM Agent (mode='task' with typed output schema)
+# 3. Specialist: ITSM Agent (Standard Conversational Sub-Agent)
 itsm_specialist = Agent(
     name="itsm_specialist",
     model=MODEL_NAME,
-    mode="task",
-    output_schema=ITSMTaskOutput,
-    description="Handles ServiceImmediately ITSM operations: ticket queries, incident creation, comments, and status transitions.",
+    description="Specialist handling ServiceImmediately ITSM operations: ticket queries, incident creation, comments, and status transitions.",
     instruction=ITSM_SPECIALIST_INSTRUCTION,
     tools=[serviceimmediately_mcp],
 )
