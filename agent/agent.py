@@ -200,44 +200,19 @@ app = App(
 )
 
 async def run_query(query: str, employee_id: str = "EMP-381") -> tuple[str, list[dict], list[dict]]:
-    """Executes a query against the master root_agent orchestrator."""
+    """Convenience helper executing a query against ADK Runner and root_agent."""
     traces = []
     turn_logs = []
     
-    msg_lower = query.lower().strip()
+    session_service = InMemorySessionService()
+    session = await session_service.create_session(session_id=f"session_{employee_id}")
+    runner = Runner(agent=root_agent, session_service=session_service)
     
-    # 1. Domain Boundary Containment Check
-    if any(k in msg_lower for k in ["python function", "binary tree", "leetcode", "write code", "javascript", "reverse string", "c++", "sort algorithm", "bubble sort", "sql query"]):
-        return "I am an enterprise HR and IT assistant. I cannot assist with general software development, coding tasks, or non-HR topics.", traces, turn_logs
-
-    # 2. Personal WorkWeek Queries
-    if any(k in msg_lower for k in ["my manager", "who is my", "my profile", "my id", "my balance", "how many leaves i have", "my sick leave"]):
-        res_data = read_fastmcp_resource(WORKWEEK_MCP_URL, f"workweek://employees/{employee_id}/profile")
-        if isinstance(res_data, dict):
-            fn = res_data.get("first_name", "Gunjangarg")
-            ln = res_data.get("last_name", "Employee")
-            m_id = res_data.get("manager_id", "EMP-1")
-            title = res_data.get("job_title", "Solutions Acceleration Architect")
-            dept = res_data.get("department", "Google Forge (Customer Engineering)")
-            addr = res_data.get("home_address", "Singapore Office, 80 Pasir Panjang Rd, Singapore")
-            phone = res_data.get("phone_number", "+65-6521-0000")
-
-            if any(m in msg_lower for m in ["manager", "supervisor", "lead", "report to"]):
-                return f"### 👤 Reporting Manager (WorkWeek HCM)\n\nYour reporting manager is **`{m_id}`**.\n\n- **Employee Name:** {fn} {ln}\n- **Job Title:** {title}\n- **Department:** {dept}\n- **Work Mode:** Remote", traces, turn_logs
-            elif any(b in msg_lower for b in ["balance", "i have", "leaves"]):
-                b_text = (
-                    "- **Vacation**: **15.0 days** remaining (Accrued: 20.0d, Used: 5.0d)\n"
-                    "- **Sick (Outpatient)**: **10.0 days** remaining (Accrued: 10.0d, Used: 0.0d)\n"
-                    "- **Hospitalization**: **46.0 days** remaining (Accrued: 46.0d, Used: 0.0d)\n"
-                    "- **Childcare**: **6.0 days** remaining (Accrued: 6.0d, Used: 0.0d)"
-                )
-                return f"Here is your current real-time leave balance from **WorkWeek**:\n\n{b_text}", traces, turn_logs
-            else:
-                return f"### 🆔 WorkWeek Employee Profile\n\nYour authenticated WorkWeek Employee ID is **`{employee_id}`**.\n\n- **Name:** {fn} {ln}\n- **Location:** {addr}\n- **Contact Phone:** `{phone}`", traces, turn_logs
-
-    # 3. Policy Knowledge Base Query (Vertex AI Search Datastore)
-    policy_resp = query_policy_knowledge_base(query)
-    if "do not contain sufficient information" not in policy_resp:
-        return f"### 📖 Policy Search Result\n\n{policy_resp}", traces, turn_logs
-
-    return policy_resp, traces, turn_logs
+    response_text = ""
+    async for event in runner.run_async(session_id=session.session_id, user_message=query):
+        if hasattr(event, "content") and event.content:
+            response_text += str(event.content)
+        elif hasattr(event, "text") and event.text:
+            response_text += str(event.text)
+            
+    return response_text or "No response received.", traces, turn_logs
