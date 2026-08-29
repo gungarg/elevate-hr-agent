@@ -27,17 +27,19 @@ from agent.tools import (
     read_fastmcp_resource,
 )
 
+import asyncio
+from agent.agent import run_query
+
 CURRENT_USER_ID = "EMP-381"
 
 def get_timestamp() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
-    """Clean orchestrator delegating natively to FastMCP tools & Vertex AI Search Datastore."""
+    """Clean orchestrator delegating 100% of intent classification & execution to Gemini & ADK Multi-Agent Runner."""
     logs = []
     traces = []
     start_time = time.time()
-    query_lower = query.lower().strip()
 
     logs.append({
         "time": get_timestamp(),
@@ -55,136 +57,10 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "message": "Model Armor Ingress Sanitization: Scan -> Pass"
         })
 
-    # Domain Boundary Containment Filter (Interception of non-HR programming tasks)
-    is_coding_request = any(k in query_lower for k in [
-        "python function", "binary tree", "leetcode", "write code", "javascript",
-        "reverse string", "c++", "sort algorithm", "bubble sort", "sql query for table"
-    ])
-    if is_coding_request:
-        logs.append({
-            "time": get_timestamp(),
-            "level": "SECURITY",
-            "stage": "MODEL_ARMOR",
-            "message": "Domain Boundary Containment: Out-of-scope refusal for non-HR programming query."
-        })
-        return {
-            "response": "I am an enterprise HR and IT assistant. I cannot assist with general software development, coding tasks, or non-HR topics.",
-            "logs": logs,
-            "traces": [{
-                "step": 1,
-                "agent": "model_armor",
-                "tool": "domain_containment",
-                "args": {"query": query},
-                "status": "OUT_OF_SCOPE_REFUSAL",
-                "result_summary": "Query blocked by security policy"
-            }],
-            "duration_ms": int((time.time() - start_time) * 1000)
-        }
-
-    # Intent Classification: Personal Data vs General Company Policy
-    is_personal_query = (
-        any(p in query_lower for p in [
-            "i have", "my leave", "my leaves", "my id", "my manager", "my profile", "my role", "my balance", "my sick",
-            "who is my", "give me my", "check my", "book", "apply", "request"
-        ])
-        and not any(g in query_lower for g in ["company", "employees get", "tiers", "duration", "rules", "handbook", "policy", "provides", "relocation", "allowance limit", "daily meal", "gift card"])
-    )
-
-    # 1. Personal Intent -> Dispatched natively to FastMCP WorkWeek / ServiceImmediately
-    if is_personal_query or query_lower in ["check my leave balance", "who is my manager", "give me my employee id"]:
-        if any(w in query_lower for w in ["manager", "supervisor", "lead", "report to"]):
-            logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: Personal Manager Query -> Dispatched to workweek_specialist"})
-            res_data = read_fastmcp_resource(WORKWEEK_MCP_URL, f"workweek://employees/{employee_id}/profile")
-            manager_id = res_data.get("manager_id", "EMP-1") if isinstance(res_data, dict) else "EMP-1"
-            first_name = res_data.get("first_name", "Gunjan") if isinstance(res_data, dict) else "Gunjan"
-            last_name = res_data.get("last_name", "Garg") if isinstance(res_data, dict) else "Garg"
-            job_title = res_data.get("job_title", "Solutions Acceleration Architect") if isinstance(res_data, dict) else "Solutions Acceleration Architect"
-            dept = res_data.get("department", "Google Forge") if isinstance(res_data, dict) else "Google Forge"
-            
-            traces.append({
-                "step": 1,
-                "agent": "workweek_specialist",
-                "tool": "workweek_mcp.get_personal_info",
-                "args": {"employee_id": employee_id},
-                "status": "SUCCESS",
-                "latency_ms": 250,
-                "result_summary": f"Retrieved profile and manager {manager_id} for {employee_id}"
-            })
-            response_text = f"### 👤 Reporting Manager (WorkWeek HCM)\n\nYour reporting manager is **`{manager_id}`**.\n\n- **Employee Name:** {first_name} {last_name}\n- **Job Title:** {job_title}\n- **Department:** {dept}\n- **Work Mode:** Remote"
-
-        elif any(w in query_lower for w in ["id", "who am i", "my profile"]):
-            logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: Personal Identity Query -> Dispatched to workweek_specialist"})
-            res_data = read_fastmcp_resource(WORKWEEK_MCP_URL, f"workweek://employees/{employee_id}/profile")
-            addr = res_data.get("home_address", "Singapore Office, 80 Pasir Panjang Rd, Singapore") if isinstance(res_data, dict) else "Singapore Office, 80 Pasir Panjang Rd, Singapore"
-            phone = res_data.get("phone_number", "+65-6521-0000") if isinstance(res_data, dict) else "+65-6521-0000"
-            first_name = res_data.get("first_name", "Gunjangarg") if isinstance(res_data, dict) else "Gunjangarg"
-            last_name = res_data.get("last_name", "Employee") if isinstance(res_data, dict) else "Employee"
-
-            traces.append({
-                "step": 1,
-                "agent": "workweek_specialist",
-                "tool": "workweek_mcp.get_current_employee_id",
-                "args": {"employee_id": employee_id},
-                "status": "SUCCESS",
-                "latency_ms": 220,
-                "result_summary": f"Fetched authenticated ID '{employee_id}'"
-            })
-            response_text = f"### 🆔 WorkWeek Employee Profile\n\nYour authenticated WorkWeek Employee ID is **`{employee_id}`**.\n\n- **Name:** {first_name} {last_name}\n- **Location:** {addr}\n- **Contact Phone:** `{phone}`"
-
-        else:
-            logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: Personal Leave Balance -> Dispatched to workweek_specialist"})
-            tool_res = call_fastmcp_tool(WORKWEEK_MCP_URL, "get_employee_balances", {"employee_id": employee_id}) or {}
-            traces.append({
-                "step": 1,
-                "agent": "workweek_specialist",
-                "tool": "workweek_mcp.get_employee_balances",
-                "args": {"employee_id": employee_id},
-                "status": "SUCCESS",
-                "latency_ms": 310,
-                "result_summary": f"Fetched real-time balance records for {employee_id}"
-            })
-            b_text = (
-                "- **Vacation**: **15.0 days** remaining (Accrued: 20.0d, Used: 5.0d)\n"
-                "- **Sick (Outpatient)**: **10.0 days** remaining (Accrued: 10.0d, Used: 0.0d)\n"
-                "- **Hospitalization**: **46.0 days** remaining (Accrued: 46.0d, Used: 0.0d)\n"
-                "- **Childcare**: **6.0 days** remaining (Accrued: 6.0d, Used: 0.0d)"
-            )
-            response_text = f"Here is your current real-time leave balance from **WorkWeek**:\n\n{b_text}"
-
-    # 2. General Company Policy Intent -> Dispatched to policy_search_tool (Vertex AI Search)
-    else:
-        logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: General Company Policy -> Called policy_search_tool"})
-        search_results = search_hr_policies(query)
-        if not search_results:
-            traces.append({
-                "step": 1,
-                "agent": "concierge_agent",
-                "tool": "policy_search_tool",
-                "args": {"query": query},
-                "status": "NO_DOCUMENTS_FOUND",
-                "latency_ms": 180,
-                "result_summary": "No matching document returned from Vertex AI Search Datastore"
-            })
-            response_text = (
-                "### 📖 Policy Search Result\n\n"
-                "No matching policy documentation was found in the **Altostrat Employee Policy Datastore** for your query.\n\n"
-                "Please contact **People Operations** at `hr-support@altostrat.com` for direct assistance."
-            )
-        else:
-            doc = search_results[0]
-            traces.append({
-                "step": 1,
-                "agent": "concierge_agent",
-                "tool": "policy_search_tool",
-                "args": {"query": query},
-                "status": "SUCCESS",
-                "latency_ms": 180,
-                "result_summary": f"Grounded in {doc.get('title', 'Policy Handbook')}"
-            })
-            section_title = doc.get("title", "Singapore Policy Handbook")
-            section_body = doc.get("content", "").strip()
-            source_url = doc.get("source_url", "gs://agenticai-gunjan-hr-policies-source/ALTOSTRAT SINGAPORE EMPLOYEE POLICY HANDBOOK & CONDUCT GUIDELINES.pdf")
-            response_text = f"### 📖 {section_title}\n\n{section_body}\n\n---\n*Source: [Altostrat Employee Policy Handbook]({source_url})*"
+    # 100% LLM-driven Intent Classification & Autonomous Tool Execution via Gemini / ADK Runner
+    response_text, turn_traces, turn_logs = asyncio.run(run_query(query, employee_id))
+    logs.extend(turn_logs)
+    traces.extend(turn_traces)
 
     if ENABLE_MODEL_ARMOR:
         logs.append({
@@ -194,12 +70,12 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "message": "Model Armor Response Inspection: SPII scan -> Pass"
         })
 
-    duration_total = int((time.time() - start_time) * 1000)
+    duration = int((time.time() - start_time) * 1000)
     return {
         "response": response_text,
         "logs": logs,
         "traces": traces,
-        "duration_ms": duration_total
+        "duration_ms": duration
     }
 
 HTML_TEMPLATE = """<!DOCTYPE html>
