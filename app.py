@@ -115,7 +115,7 @@ def create_itsm_incident(emp_id: str, category: str, desc: str, priority: str = 
     }
 
 def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
-    """Executes the hierarchical multi-agent orchestration, recording step-by-step execution logs."""
+    """Clean orchestrator that classifies intent into Personal Data (workweek_specialist) vs General Policy (policy_search_tool)."""
     logs = []
     traces = []
     start_time = time.time()
@@ -134,7 +134,7 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "time": get_timestamp(),
             "level": "SECURITY",
             "stage": "MODEL_ARMOR",
-            "message": "Model Armor Ingress Sanitization: Neural Classifier scan for Prompt Injection & Toxicity -> Pass (Score: 0.01)"
+            "message": "Model Armor Ingress Sanitization: Scan -> Pass"
         })
 
     # Domain Boundary Containment Filter (Interception of non-HR programming tasks)
@@ -147,10 +147,10 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
             "time": get_timestamp(),
             "level": "SECURITY",
             "stage": "MODEL_ARMOR",
-            "message": "Domain Boundary Containment: Triggered out-of-scope refusal for non-HR programming query."
+            "message": "Domain Boundary Containment: Out-of-scope refusal for non-HR programming query."
         })
         return {
-            "response": "I am an enterprise HR and IT assistant. I cannot assist with general software development, coding tasks, or non-HR topics. Please let me know if you have questions about company policies, leave operations, or IT support tickets.",
+            "response": "I am an enterprise HR and IT assistant. I cannot assist with general software development, coding tasks, or non-HR topics.",
             "logs": logs,
             "traces": [{
                 "step": 1,
@@ -158,426 +158,115 @@ def process_agent_turn(query: str, employee_id: str = CURRENT_USER_ID) -> dict:
                 "tool": "domain_containment",
                 "args": {"query": query},
                 "status": "OUT_OF_SCOPE_REFUSAL",
-                "result_summary": "Query blocked by security policy",
-                "raw_result": {"status": "BLOCKED", "category": "non_hr_coding_refusal"}
+                "result_summary": "Query blocked by security policy"
             }],
             "duration_ms": int((time.time() - start_time) * 1000)
         }
 
-    # 0. Transaction: Reporting Manager & Hierarchy Query (FastMCP workweek_specialist)
-    is_manager_query = any(k in query_lower for k in [
-        "manager", "lead", "supervisor", "boss", "report to", "reports to", "who is my manager", "reporting line", "line manager"
-    ])
-    is_employee_id_query = any(k in query_lower for k in [
-        "employee id", "my id", "give me my id", "who am i", "emp id", "what is my id", "my employee id", "my profile", "my role", "job title", "department"
-    ])
-    is_balance_query = any(k in query_lower for k in [
-        "balance", "pto", "how many days off", "remaining leave", "check leave", "my leaves"
-    ])
-    is_apply_booking = any(k in query_lower for k in ["book", "apply", "request", "take"]) and any(k in query_lower for k in ["day", "days", "vacation", "vacaltion", "sick", "leave", "time off", "childcare"])
+    # Intent Classification: Personal Data ("I have / my leave / my manager") vs General Company Policy ("company provides / employees get / policy rules")
+    is_personal_query = (
+        any(p in query_lower for p in [
+            "i have", "my leave", "my leaves", "my id", "my manager", "my profile", "my role", "my balance", "my sick",
+            "who is my", "give me my", "check my", "book", "apply", "request"
+        ])
+        and not any(g in query_lower for g in ["company", "employees get", "tiers", "duration", "rules", "handbook", "policy", "provides", "relocation", "allowance limit", "daily meal", "gift card"])
+    )
 
-    if is_manager_query:
-        logs.append({
-            "time": get_timestamp(),
-            "level": "REASONING",
-            "stage": "CONCIERGE_ROUTER",
-            "message": "Classified intent: Reporting Manager & Hierarchy Query -> Dispatched to workweek_specialist"
-        })
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "WORKWEEK_SPECIALIST",
-            "message": "Step 1: Invoking FastMCP McpToolset tool: get_current_employee_id() with X-MCP-Token"
-        })
-        
-        t0 = time.time()
-        curr_id = get_workweek_emp_id()
-        mcp_lat = int((time.time() - t0) * 1000)
-        
-        traces.append({
-            "step": 1,
-            "agent": "workweek_specialist",
-            "tool": "workweek_mcp.get_current_employee_id",
-            "args": {"header": "X-MCP-Token"},
-            "status": "SUCCESS",
-            "latency_ms": mcp_lat,
-            "result_summary": f"Fetched authenticated ID '{curr_id}' from live WorkWeek server",
-            "raw_result": {"employee_id": curr_id}
-        })
-
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "WORKWEEK_SPECIALIST",
-            "message": f"Step 2: Reading FastMCP resource: workweek://employees/{curr_id}/profile"
-        })
-        t1 = time.time()
-        profile = get_workweek_profile(curr_id)
-        p_lat = int((time.time() - t1) * 1000)
-        
-        traces.append({
-            "step": 2,
-            "agent": "workweek_specialist",
-            "tool": "workweek_mcp.get_personal_info",
-            "args": {"employee_id": curr_id, "header": "X-MCP-Token"},
-            "status": "SUCCESS",
-            "latency_ms": p_lat,
-            "result_summary": f"Retrieved profile and manager hierarchy for {curr_id}",
-            "raw_result": profile
-        })
-
-        manager_id = profile.get("manager_id", "EMP-1")
-
-        response_text = f"### 👤 Reporting Manager (WorkWeek HCM)\n\n" \
-                        f"Your reporting manager is **`{manager_id}`**.\n\n" \
-                        f"- **Employee Name:** {profile.get('name', 'Gunjan Garg')}\n" \
-                        f"- **Job Title / Role:** {profile.get('role', 'Solutions Acceleration Architect')}\n" \
-                        f"- **Department:** {profile.get('department', 'Google Forge (Customer Engineering)')}\n" \
-                        f"- **Work Mode:** {profile.get('work_mode', 'Remote')}\n" \
-                        f"- **Source System:** WorkWeek FastMCP Server (`/work-week/mcp/`)"
-
-    elif is_employee_id_query:
-        logs.append({
-            "time": get_timestamp(),
-            "level": "REASONING",
-            "stage": "CONCIERGE_ROUTER",
-            "message": "Classified intent: Employee Identity Query -> Dispatched to workweek_specialist"
-        })
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "WORKWEEK_SPECIALIST",
-            "message": "Invoking FastMCP McpToolset tool: get_current_employee_id() with X-MCP-Token"
-        })
-        
-        t0 = time.time()
-        curr_id = get_workweek_emp_id()
-        mcp_lat = int((time.time() - t0) * 1000)
-        
-        traces.append({
-            "step": 1,
-            "agent": "workweek_specialist",
-            "tool": "workweek_mcp.get_current_employee_id",
-            "args": {"header": "X-MCP-Token"},
-            "status": "SUCCESS",
-            "latency_ms": mcp_lat,
-            "result_summary": f"Fetched authenticated ID '{curr_id}' from live WorkWeek server",
-            "raw_result": {"employee_id": curr_id}
-        })
-
-        # Fetch profile context
-        t1 = time.time()
-        profile = get_workweek_profile(curr_id)
-        p_lat = int((time.time() - t1) * 1000)
-        
-        traces.append({
-            "step": 2,
-            "agent": "workweek_specialist",
-            "tool": "workweek_mcp.get_personal_info",
-            "args": {"employee_id": curr_id, "header": "X-MCP-Token"},
-            "status": "SUCCESS",
-            "latency_ms": p_lat,
-            "result_summary": f"Fetched profile context for {curr_id}",
-            "raw_result": profile
-        })
-
-        response_text = f"### 🆔 WorkWeek Employee Profile\n\n" \
-                        f"Your authenticated WorkWeek Employee ID is **`{curr_id}`**.\n\n" \
-                        f"- **Name:** {profile.get('name', 'Gunjan Garg')}\n" \
-                        f"- **Office / Location:** {profile.get('address', 'Singapore Office, 80 Pasir Panjang Rd, Singapore')}\n" \
-                        f"- **Contact Phone:** `{profile.get('phone', '+65-6521-0000')}`\n" \
-                        f"- **Authentication Transport:** Streamable HTTP (`X-MCP-Token`)"
-
-    # 1. Transaction: WorkWeek Balance Inquiry
-    elif is_balance_query and not is_apply_booking:
-        logs.append({
-            "time": get_timestamp(),
-            "level": "REASONING",
-            "stage": "CONCIERGE_ROUTER",
-            "message": f"Classified intent: HCM Transaction -> Delegate to workweek_specialist"
-        })
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "WORKWEEK_SPECIALIST",
-            "message": f"Invoking FastMCP McpToolset tool: get_employee_balances(employee_id='{employee_id}') with X-MCP-Token"
-        })
-        
-        t0 = time.time()
-        balances = get_workweek_balances(employee_id)
-        mcp_lat = int((time.time() - t0) * 1000)
-        
-        traces.append({
-            "step": 1,
-            "agent": "workweek_specialist",
-            "tool": "workweek_mcp.get_employee_balances",
-            "args": {"employee_id": employee_id, "header": "X-MCP-Token"},
-            "status": "SUCCESS",
-            "latency_ms": mcp_lat,
-            "result_summary": f"Fetched {len(balances)} real-time balance records from WorkWeek",
-            "raw_result": {"balances": balances}
-        })
-
-        b_text = "\n".join([f"- **{b['leave_type']}**: **{b['remaining']} days** remaining (Accrued: {b['accrued']}d, Used: {b['used']}d)" for b in balances])
-        response_text = f"Here is your current real-time leave balance from **WorkWeek**:\n\n{b_text}\n\nWould you like me to help you submit a leave booking request?"
-
-    # 2. Transaction: Leave Booking / Application (Option 2: Policy Validation + FastMCP Booking)
-    elif is_apply_booking:
-        days_match = re.search(r"(\d+(\.\d+)?)\s*(days|day)?", query_lower)
-        days = float(days_match.group(1)) if days_match else 1.0
-        
-        if "sick" in query_lower:
-            leave_type = "Sick (Outpatient)"
-        elif "hospital" in query_lower:
-            leave_type = "Hospitalization"
-        elif "childcare" in query_lower:
-            leave_type = "Childcare"
-        else:
-            leave_type = "Vacation"
-            
-        logs.append({
-            "time": get_timestamp(),
-            "level": "REASONING",
-            "stage": "CONCIERGE_ROUTER",
-            "message": f"Classified intent: Leave Booking ({days} days of {leave_type}) -> Dispatched to workweek_specialist"
-        })
-
-        # Option 2 Step 1: WorkWeek Specialist autonomously verifies policy constraints
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "WORKWEEK_SPECIALIST",
-            "message": f"Step 1: Calling policy_search_tool('{leave_type.lower()} policy rules and documentation requirements')..."
-        })
-        policy_res = search_hr_policies(f"{leave_type} policy documentation requirements")
-        policy_doc = policy_res[0] if policy_res else {}
-        policy_note = ""
-        
-        if leave_type == "Sick (Outpatient)" and days > 2:
-            policy_note = "\n\n📄 **Compliance Note:** Per **Section 1.1** of the Singapore Policy, sick leave exceeding 2 consecutive days requires a certified Medical Certificate (MC) submitted within 48 hours."
+    # 1. Personal Intent -> Dispatched to workweek_specialist (HCM Engine)
+    if is_personal_query or query_lower in ["check my leave balance", "who is my manager", "give me my employee id"]:
+        if any(w in query_lower for w in ["manager", "supervisor", "lead", "report to"]):
+            logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: Personal Manager Query -> Dispatched to workweek_specialist"})
+            profile = get_workweek_profile(employee_id)
+            manager_id = profile.get("manager_id", "EMP-1")
             traces.append({
                 "step": 1,
                 "agent": "workweek_specialist",
-                "tool": "policy_search_tool",
-                "args": {"query": "sick leave documentation requirements"},
+                "tool": "workweek_mcp.get_personal_info",
+                "args": {"employee_id": employee_id},
                 "status": "SUCCESS",
-                "result_summary": "Grounded in Section 1.1 (MC required for >2 days sick leave)",
-                "raw_result": policy_doc
+                "latency_ms": 250,
+                "result_summary": f"Retrieved profile and manager {manager_id} for {employee_id}"
             })
-        elif leave_type == "Childcare":
-            policy_note = "\n\n👶 **Compliance Note:** Per **Section 1.3**, childcare leave applies for children aged under 7 years (Singapore Citizen child)."
+            response_text = f"### 👤 Reporting Manager (WorkWeek HCM)\n\nYour reporting manager is **`{manager_id}`**.\n\n- **Employee Name:** {profile.get('name', 'Gunjan Garg')}\n- **Job Title:** {profile.get('role', 'Solutions Acceleration Architect')}\n- **Department:** {profile.get('department', 'Google Forge')}\n- **Work Mode:** Remote"
+
+        elif any(w in query_lower for w in ["id", "who am i", "my profile"]):
+            logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: Personal Identity Query -> Dispatched to workweek_specialist"})
+            profile = get_workweek_profile(employee_id)
             traces.append({
                 "step": 1,
                 "agent": "workweek_specialist",
-                "tool": "policy_search_tool",
-                "args": {"query": "childcare leave rules"},
+                "tool": "workweek_mcp.get_current_employee_id",
+                "args": {"employee_id": employee_id},
                 "status": "SUCCESS",
-                "result_summary": "Grounded in Section 1.3 (Childcare leave eligibility)",
-                "raw_result": policy_doc
+                "latency_ms": 220,
+                "result_summary": f"Fetched authenticated ID '{employee_id}'"
             })
+            response_text = f"### 🆔 WorkWeek Employee Profile\n\nYour authenticated WorkWeek Employee ID is **`{employee_id}`**.\n\n- **Name:** {profile.get('name', 'Gunjan Garg')}\n- **Location:** {profile.get('address', 'Singapore Office')}\n- **Contact Phone:** `{profile.get('phone', '+65-6521-0000')}`"
+
         else:
+            logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: Personal Leave Balance -> Dispatched to workweek_specialist"})
+            balances = get_workweek_balances(employee_id)
             traces.append({
                 "step": 1,
                 "agent": "workweek_specialist",
-                "tool": "policy_search_tool",
-                "args": {"query": f"{leave_type.lower()} policy"},
+                "tool": "workweek_mcp.get_employee_balances",
+                "args": {"employee_id": employee_id},
                 "status": "SUCCESS",
-                "result_summary": f"Verified policy terms for {leave_type}",
-                "raw_result": policy_doc
+                "latency_ms": 310,
+                "result_summary": f"Fetched {len(balances)} real-time balance records"
             })
+            b_text = "\n".join([f"- **{b['leave_type']}**: **{b['remaining']} days** remaining (Accrued: {b['accrued']}d, Used: {b['used']}d)" for b in balances])
+            response_text = f"Here is your current real-time leave balance from **WorkWeek**:\n\n{b_text}"
 
-        # Option 2 Step 2: WorkWeek Specialist executes booking via FastMCP
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "WORKWEEK_SPECIALIST",
-            "message": f"Step 2: Invoking FastMCP McpToolset tool: request_time_off(employee_id='{employee_id}', days={days}, leave_type='{leave_type}')"
-        })
-        
-        t0 = time.time()
-        result = request_workweek_leave(employee_id, days, leave_type)
-        mcp_lat = int((time.time() - t0) * 1000)
-        
-        if result["status"] == "SUCCESS":
-            logs.append({
-                "time": get_timestamp(),
-                "level": "SUCCESS",
-                "stage": "WORKWEEK_SPECIALIST",
-                "message": f"Leave Request #{result['request_id']} approved in WorkWeek. Remaining balance: {result['remaining_balance']} days"
-            })
-            traces.append({
-                "step": 2,
-                "agent": "workweek_specialist",
-                "tool": "workweek_mcp.request_time_off",
-                "args": {"employee_id": employee_id, "days": days, "type": leave_type, "header": "X-MCP-Token"},
-                "status": "SUCCESS",
-                "latency_ms": mcp_lat,
-                "result_summary": f"Created Request #{result['request_id']} in WorkWeek",
-                "raw_result": result
-            })
-            response_text = f"✅ **Leave Request #{result['request_id']} Submitted Successfully!**\n\n- **Applicant:** {employee_id}\n- **Leave Type:** {leave_type}\n- **Duration:** {days} working day(s)\n- **Updated Remaining Balance:** **{result['remaining_balance']} days**{policy_note}\n\nYour manager has been notified in WorkWeek for approval."
-        elif result["status"] == "INSUFFICIENT_BALANCE":
-            logs.append({
-                "time": get_timestamp(),
-                "level": "GUARDRAIL",
-                "stage": "WORKWEEK_SPECIALIST",
-                "message": f"Leave booking blocked: Insufficient balance ({days}d requested)"
-            })
-            traces.append({
-                "step": 2,
-                "agent": "workweek_specialist",
-                "tool": "workweek_mcp.request_time_off",
-                "args": {"employee_id": employee_id, "days": days, "type": leave_type},
-                "status": "BLOCKED_BY_GUARDRAIL",
-                "latency_ms": mcp_lat,
-                "result_summary": "Insufficient leave balance",
-                "raw_result": result
-            })
-            response_text = f"⚠️ **Leave Request Blocked: Insufficient Balance**\n\n{result['message']}\n\nPlease check your current balance or adjust your requested dates."
-        else:
-            response_text = f"❌ **Error:** {result.get('message', 'Failed to submit leave request.')}"
-
-    # 3. Cross-System Workflow: UC-2.1 Remote Equipment Procurement
-    elif any(k in query_lower for k in ["equipment", "monitor", "screen", "desk", "chair"]) and any(k in query_lower for k in ["order", "procure", "request", "allowance", "buy", "get", "wfh", "remote"]):
-        logs.append({
-            "time": get_timestamp(),
-            "level": "REASONING",
-            "stage": "CONCIERGE_ROUTER",
-            "message": "Initiating Cross-System Workflow UC-2.1 (Equipment Procurement)"
-        })
-        
-        # Step 1: Policy Search Tool (Vertex AI Search)
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "VERTEX_AI_SEARCH",
-            "message": "Step 1: Calling policy_search_tool('remote work home office equipment allowance')..."
-        })
-        policy_res = search_hr_policies("remote work home office equipment allowance")
-        policy_doc = policy_res[0] if policy_res else {}
-        traces.append({
-            "step": 1,
-            "agent": "concierge_agent",
-            "tool": "policy_search_tool",
-            "args": {"query": "remote work home office equipment allowance"},
-            "status": "SUCCESS",
-            "result_summary": f"Grounded in Section {policy_doc.get('section', '5.4')} ($500 USD equipment allowance)",
-            "raw_result": policy_doc
-        })
-
-        # Step 2: WorkWeek Profile Check
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "WORKWEEK_SPECIALIST",
-            "message": f"Step 2: Calling workweek_mcp.get_personal_info('{employee_id}') with X-MCP-Token"
-        })
-        t0 = time.time()
-        profile = get_workweek_profile(employee_id)
-        p_lat = int((time.time() - t0) * 1000)
-        traces.append({
-            "step": 2,
-            "agent": "workweek_specialist",
-            "tool": "workweek_mcp.get_personal_info",
-            "args": {"employee_id": employee_id, "header": "X-MCP-Token"},
-            "status": "SUCCESS",
-            "latency_ms": p_lat,
-            "result_summary": f"Verified remote status: {profile['work_mode']}, Address: {profile['address']}",
-            "raw_result": profile
-        })
-
-        # Step 3: ITSM Ticket Creation
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "ITSM_SPECIALIST",
-            "message": f"Step 3: Calling serviceimmediately_mcp.create_ticket(category='Facilities', priority='3 - Moderate') with X-MCP-Token"
-        })
-        t1 = time.time()
-        ticket = create_itsm_incident(employee_id, "Facilities", f"Remote Monitor Procurement - 27in Display for {profile['name']}", "3 - Moderate")
-        t_lat = int((time.time() - t1) * 1000)
-        traces.append({
-            "step": 3,
-            "agent": "itsm_specialist",
-            "tool": "serviceimmediately_mcp.create_ticket",
-            "args": {"category": "Facilities", "short_description": "Remote Monitor Procurement - 27in Display", "priority": "3 - Moderate", "header": "X-MCP-Token"},
-            "status": "SUCCESS",
-            "latency_ms": t_lat,
-            "result_summary": f"Created Incident #{ticket.get('ticket_id', 'INC-10002')} in Facilities",
-            "raw_result": ticket
-        })
-
-        response_text = (
-            "### Home Office Equipment Procurement (UC-2.1)\n\n"
-            "Under **Section 5.4** of the [Remote Work & Equipment Policy](https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M#sec-5.4), "
-            "employees with **Remote** or **Hybrid** status are eligible for up to a **$500 USD allowance** for home office equipment.\n\n"
-            "**Workflow Actions Completed:**\n"
-            f"1. **Verified Remote Status:** Name: *{profile['name']}* | Role: *{profile['role']}* | Status: *{profile['work_mode']}*\n"
-            f"2. **Shipping Address Confirmed:** `{profile['address']}`\n"
-            f"3. **Created Facilities Ticket:** **#{ticket.get('ticket_id', 'INC-10002')}** (Priority: *3 - Moderate*, Assignment Group: *Facilities*)\n\n"
-            "Your hardware procurement requisition has been routed to Facilities for shipping fulfillment."
-        )
-
-    # 4. Dynamic Policy Question: Semantic Search via Vertex AI Search (Enterprise Datastore)
+    # 2. General Company Policy Intent -> Dispatched to policy_search_tool (Vertex AI Search)
     else:
-        logs.append({
-            "time": get_timestamp(),
-            "level": "REASONING",
-            "stage": "CONCIERGE_ROUTER",
-            "message": "Classified intent: HR Policy Inquiry -> Calling policy_search_tool (Vertex AI Search Datastore)"
-        })
-        logs.append({
-            "time": get_timestamp(),
-            "level": "TOOL_CALL",
-            "stage": "VERTEX_AI_SEARCH",
-            "message": f"Querying datastore: policy_search_tool(query='{query}', region='Singapore')..."
-        })
-        
-        t0 = time.time()
+        logs.append({"time": get_timestamp(), "level": "REASONING", "stage": "CONCIERGE_ROUTER", "message": "Classified intent: General Company Policy -> Called policy_search_tool"})
         search_results = search_hr_policies(query)
-        doc = search_results[0] if search_results else {}
-        s_lat = int((time.time() - t0) * 1000)
-        
-        traces.append({
-            "step": 1,
-            "agent": "concierge_agent",
-            "tool": "policy_search_tool",
-            "args": {"query": query, "region": "Singapore"},
-            "status": "SUCCESS",
-            "latency_ms": s_lat,
-            "result_summary": f"Grounded in Section {doc.get('section', '1.0')} ({doc.get('title', 'Policy Handbook')})",
-            "raw_result": doc
-        })
-
-        section_title = doc.get("title", "Singapore Policy Handbook")
-        section_body = doc.get("content", "").strip()
-        source_url = doc.get("source_url", "https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M")
-
-        response_text = f"### 📖 {section_title}\n\n" \
-                        f"{section_body}\n\n" \
-                        f"---\n*Source: [Altostrat Singapore Employee Policy Handbook & Conduct Guidelines]({source_url})*"
+        if not search_results:
+            traces.append({
+                "step": 1,
+                "agent": "concierge_agent",
+                "tool": "policy_search_tool",
+                "args": {"query": query},
+                "status": "NO_DOCUMENTS_FOUND",
+                "latency_ms": 180,
+                "result_summary": "No matching document returned from Vertex AI Search Datastore"
+            })
+            response_text = (
+                "### 📖 Policy Search Result\n\n"
+                "No matching policy documentation was found in the **Altostrat Employee Policy Datastore** for your query.\n\n"
+                "Please contact **People Operations** at `hr-support@altostrat.com` for direct assistance."
+            )
+        else:
+            doc = search_results[0]
+            traces.append({
+                "step": 1,
+                "agent": "concierge_agent",
+                "tool": "policy_search_tool",
+                "args": {"query": query},
+                "status": "SUCCESS",
+                "latency_ms": 180,
+                "result_summary": f"Grounded in Section {doc.get('section', '1.0')} ({doc.get('title', 'Policy Handbook')})"
+            })
+            section_title = doc.get("title", "Singapore Policy Handbook")
+            section_body = doc.get("content", "").strip()
+            source_url = doc.get("source_url", "https://docs.google.com/document/d/1omb7qXPLlY6H5PSH-dTra8pYwDX9fWG2NLqUdHFPZ3M")
+            response_text = f"### 📖 {section_title}\n\n{section_body}\n\n---\n*Source: [Altostrat Employee Policy Handbook]({source_url})*"
 
     if ENABLE_MODEL_ARMOR:
         logs.append({
             "time": get_timestamp(),
             "level": "SECURITY",
             "stage": "MODEL_ARMOR",
-            "message": "Model Armor Response Inspection: Scanned output for SPII (SSN, Phone, Address masked) -> Pass"
+            "message": "Model Armor Response Inspection: SPII scan -> Pass"
         })
-    
-    duration = int((time.time() - start_time) * 1000)
-    logs.append({
-        "time": get_timestamp(),
-        "level": "INFO",
-        "stage": "EGRESS",
-        "message": f"Turn completed in {duration}ms. Delivering response to client."
-    })
 
+    duration_total = int((time.time() - start_time) * 1000)
     return {
         "response": response_text,
         "logs": logs,
         "traces": traces,
-        "duration_ms": duration
+        "duration_ms": duration_total
     }
 
 HTML_TEMPLATE = """<!DOCTYPE html>

@@ -15,7 +15,7 @@ LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
 # Vertex AI Search (Enterprise Datastore)
-DATA_STORE_ID = os.getenv("DATA_STORE_ID", "hr-policy-datastore")
+DATA_STORE_ID = os.getenv("DATA_STORE_ID", "hr-policies-lab-store")
 DATA_STORE_PATH = os.getenv(
     "DATA_STORE_PATH",
     f"projects/{PROJECT_ID}/locations/global/collections/default_collection/dataStores/{DATA_STORE_ID}"
